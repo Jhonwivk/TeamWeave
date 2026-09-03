@@ -28,10 +28,61 @@ export const workers = sqliteTable("workers", {
   index("idx_workers_owner_last_seen").on(table.ownerId, table.lastSeenAt),
 ]);
 
+export const developmentWorkspaces = sqliteTable("development_workspaces", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  repositoryId: text("repository_id").notNull().references(() => repositories.id),
+  workerId: text("worker_id").notNull().references(() => workers.id),
+  localPath: text("local_path").notNull(),
+  baseBranch: text("base_branch").notNull().default("main"),
+  workingBranch: text("working_branch"),
+  status: text("status").notNull().default("preparing"),
+  error: text("error"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  lastActiveAt: integer("last_active_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_development_workspaces_repo_worker").on(table.repositoryId, table.workerId),
+  index("idx_development_workspaces_owner_status").on(table.ownerId, table.status),
+  index("idx_development_workspaces_worker_active").on(table.workerId, table.lastActiveAt),
+]);
+
+export const workspaceProcesses = sqliteTable("workspace_processes", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  pid: integer("pid").notNull(),
+  command: text("command").notNull(),
+  cwd: text("cwd"),
+  status: text("status").notNull().default("running"),
+  startedAt: integer("started_at"),
+  firstSeenAt: integer("first_seen_at").notNull(),
+  lastSeenAt: integer("last_seen_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_workspace_processes_workspace_pid").on(table.workspaceId, table.pid),
+  index("idx_workspace_processes_workspace_status").on(table.workspaceId, table.status),
+]);
+
+export const workspacePorts = sqliteTable("workspace_ports", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  processId: text("process_id").references(() => workspaceProcesses.id),
+  port: integer("port").notNull(),
+  protocol: text("protocol").notNull().default("tcp"),
+  host: text("host").notNull().default("127.0.0.1"),
+  kind: text("kind").notNull().default("unknown"),
+  status: text("status").notNull().default("listening"),
+  firstSeenAt: integer("first_seen_at").notNull(),
+  lastSeenAt: integer("last_seen_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_workspace_ports_workspace_port_protocol").on(table.workspaceId, table.port, table.protocol),
+  index("idx_workspace_ports_workspace_status").on(table.workspaceId, table.status),
+]);
+
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull(),
   repositoryId: text("repository_id").notNull().references(() => repositories.id),
+  workspaceId: text("workspace_id").references(() => developmentWorkspaces.id),
   title: text("title").notNull(),
   prompt: text("prompt").notNull(),
   actor: text("actor").notNull(),
@@ -54,6 +105,7 @@ export const tasks = sqliteTable("tasks", {
 }, (table) => [
   index("idx_tasks_owner_status_updated").on(table.ownerId, table.status, table.updatedAt),
   index("idx_tasks_worker_status").on(table.workerId, table.status),
+  index("idx_tasks_workspace_updated").on(table.workspaceId, table.updatedAt),
 ]);
 
 export const taskEvents = sqliteTable("task_events", {

@@ -39,6 +39,7 @@ if (!CONTROL_URL || !TOKEN) {
 
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+const terminalProcesses = new Map();
 
 async function api(path, body) {
   const response = await fetch(`${CONTROL_URL}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
@@ -136,6 +137,14 @@ async function sendWorkspaceEvent(workspaceId, event) {
     });
   } catch (error) {
     console.error("Could not send workspace event:", error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function sendTerminalEvent(terminalId, event) {
+  try {
+    await api("/api/worker/terminal", { terminalId, ...event });
+  } catch (error) {
+    console.error("Could not send terminal event:", error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -333,6 +342,133 @@ async function prepareWorkspace(workspace) {
   await run("git", ["config", "user.name", "TeamWeave Worker"], { cwd: repositoryDir });
   await run("git", ["config", "user.email", "teamweave-worker@users.noreply.github.com"], { cwd: repositoryDir });
   return { repositoryDir, branch };
+}
+
+function terminalShell(shell) {
+  if (process.platform === "win32") {
+    if (shell === "cmd") return { command: "cmd.exe", args: [] };
+    return { command: shell === "pwsh" ? "pwsh.exe" : "powershell.exe", args: ["-NoLogo", "-NoProfile"] };
+  }
+  const command = ["bash", "zsh", "sh"].includes(shell) ? shell : (process.env.SHELL || "/bin/bash");
+  return { command, args: ["-il"] };
+}
+
+async function terminalSpawnSpec(shell) {
+  const base = terminalShell(shell);
+  const scriptPath = process.platform !== "win32" && (await exists("/usr/bin/script") || await exists("/bin/script"))
+    ? (await exists("/usr/bin/script") ? "/usr/bin/script" : "/bin/script")
+    : null;
+  if (scriptPath && process.platform === "linux") {
+    return {
+      command: scriptPath,
+      args: ["-qefc", `exec ${base.command} ${base.args.join(" ")}`, "/dev/null"],
+      shell: base.command,
+      pty: true,
+    };
+  }
+  if (scriptPath && process.platform === "darwin") {
+    return { command: scriptPath, args: ["-q", "/dev/null", base.command, ...base.args], shell: base.command, pty: true };
+  }
+  return { command: base.command, args: base.args, shell: base.command, pty: false };
+}
+
+function terminalEnvironment() {
+  const childEnv = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" };
+  delete childEnv.AGENTMUX_TOKEN;
+  delete childEnv.AGENTMUX_SITE_TOKEN;
+  delete childEnv.GH_TOKEN;
+  delete childEnv.GITHUB_TOKEN;
+  return childEnv;
+}
+
+async function startTerminalProcess(job) {
+  const terminal = job.terminal;
+  const workspace = job.workspace;
+  const existing = terminalProcesses.get(String(terminal.id));
+  if (existing) return existing;
+  const cwd = workspaceDirectory({ id: workspace.id, localPath: workspace.localPath });
+  if (!(await exists(cwd))) throw new Error(`Workspace directory is not available: ${cwd}`);
+  const shell = await terminalSpawnSpec(String(terminal.shell || "bash"));
+  const child = spawn(shell.command, shell.args, {
+    cwd,
+    env: terminalEnvironment(),
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: false,
+  });
+  const state = { child, stopping: false, cwd, shell: shell.shell, pty: shell.pty };
+  terminalProcesses.set(String(terminal.id), state);
+  child.stdout?.on("data", (chunk) => void sendTerminalEvent(String(terminal.id), {
+    kind: "terminal.output",
+    data: chunk.toString(),
+    payload: { stream: "stdout" },
+  }));
+  child.stderr?.on("data", (chunk) => void sendTerminalEvent(String(terminal.id), {
+    kind: "terminal.output",
+    data: chunk.toString(),
+    payload: { stream: "stderr" },
+  }));
+  child.on("error", (error) => {
+    if (terminalProcesses.get(String(terminal.id)) === state) terminalProcesses.delete(String(terminal.id));
+    void sendTerminalEvent(String(terminal.id), {
+      kind: "terminal.failed",
+      data: error instanceof Error ? error.message : String(error),
+      terminal: { status: "failed", pid: null, error: error instanceof Error ? error.message : String(error) },
+    });
+  });
+  child.on("close", (code) => {
+    if (terminalProcesses.get(String(terminal.id)) === state) terminalProcesses.delete(String(terminal.id));
+    const status = state.stopping ? "stopped" : "exited";
+    void sendTerminalEvent(String(terminal.id), {
+      kind: state.stopping ? "terminal.stopped" : "terminal.exited",
+      data: `Shell exited with code ${code ?? 0}`,
+      terminal: { status, pid: null, exitCode: code ?? 0 },
+    });
+  });
+  await sendTerminalEvent(String(terminal.id), {
+    kind: "terminal.started",
+    data: `Connected to ${shell.command} in ${cwd}\n`,
+    payload: { shell: shell.shell, cwd, pid: child.pid, pty: shell.pty },
+    terminal: { status: "running", pid: child.pid ?? null, shell: shell.shell, cwd },
+  });
+  return state;
+}
+
+async function runTerminalJob(job) {
+  const terminalId = String(job.terminal?.id || "");
+  const commandId = String(job.command?.id || "");
+  const action = String(job.command?.kind || "");
+  if (!terminalId || !commandId) throw new Error("Terminal job is missing terminal or command metadata");
+  try {
+    if (action === "start") {
+      await startTerminalProcess(job);
+    } else if (action === "input") {
+      const state = await startTerminalProcess(job);
+      const data = typeof job.command?.payload?.data === "string" ? job.command.payload.data : "";
+      if (state.child.stdin && !state.child.stdin.write(data)) await new Promise((resolveWrite) => state.child.stdin.once("drain", resolveWrite));
+      await sendTerminalEvent(terminalId, { kind: "terminal.input", data, payload: { commandId }, terminal: { status: "running" } });
+    } else if (action === "resize") {
+      const cols = Number(job.command?.payload?.cols || 120);
+      const rows = Number(job.command?.payload?.rows || 32);
+      await sendTerminalEvent(terminalId, { kind: "terminal.resized", data: `Terminal size ${cols}×${rows}`, payload: { commandId, cols, rows }, terminal: { status: "running", cols, rows } });
+    } else if (action === "stop") {
+      const state = terminalProcesses.get(terminalId);
+      if (state) {
+        state.stopping = true;
+        state.child.kill("SIGTERM");
+        setTimeout(() => {
+          if (terminalProcesses.get(terminalId) === state) state.child.kill("SIGKILL");
+        }, 1500);
+      }
+      await sendTerminalEvent(terminalId, { kind: "terminal.stopped", data: "Terminal stopped by operator", payload: { commandId }, terminal: { status: "stopped", pid: null } });
+    } else {
+      throw new Error(`Unsupported terminal command: ${action}`);
+    }
+    await sendTerminalEvent(terminalId, { kind: "terminal.command_done", payload: { commandId, action }, terminal: { status: action === "stop" ? "stopped" : "running" } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await sendTerminalEvent(terminalId, { kind: "terminal.command_failed", data: message, payload: { commandId, action }, terminal: { status: "failed", error: message } });
+    throw error;
+  }
 }
 
 async function runWorkspaceJob(job) {
@@ -755,6 +891,7 @@ while (true) {
     console.log(`[${job.id}] ${job.operation}: ${job.title || job.workspace?.repository || "workspace"}${job.sessions ? ` · ${job.sessions.length} session(s)` : ""}`);
     try {
       if (job.operation === "workspace") await runWorkspaceJob(job);
+      else if (job.operation === "terminal") await runTerminalJob(job);
       else if (job.operation === "publish") await publish(job);
       else await runWorkflow(job);
     } catch (error) {
@@ -764,6 +901,12 @@ while (true) {
           kind: "workspace.failed",
           message: "Worker could not complete the workspace job",
           workspace: { status: "failed", error: error instanceof Error ? error.message : String(error) },
+        });
+      } else if (job.operation === "terminal" && job.terminal?.id) {
+        await sendTerminalEvent(job.terminal.id, {
+          kind: "terminal.failed",
+          data: error instanceof Error ? error.message : String(error),
+          terminal: { status: "failed", error: error instanceof Error ? error.message : String(error) },
         });
       } else {
         await sendEvent(job.id, {

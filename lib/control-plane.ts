@@ -64,6 +64,14 @@ export function workspaceId() {
   return `ws_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }
 
+export function terminalId() {
+  return `term_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
+export function terminalCommandId() {
+  return `termcmd_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
 export function sessionId() {
   return `sess_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }

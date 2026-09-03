@@ -119,6 +119,10 @@ node agentmux-worker.mjs
 3. 从 `baseBranch` 创建或复用 `workingBranch`，并写入 TeamWeave 的 Git 提交身份；
 4. 通过 `/api/worker/events` 报告 `claiming`、`preparing`、`ready` 或 `failed`，包括本地路径和工作分支。
 
+Workspace 进入 `ready` 后，**Workspaces → Terminal** 会启动一个由同一 Worker 托管的交互 Shell。浏览器命令通过 `/api/workspaces/:id/terminal` 排队，Worker 通过 `/api/worker/poll` 领取 `terminal` 作业，再从 `/api/worker/terminal` 回传输出和状态。终端只访问本机 Workspace checkout，不会把源码上传到控制面。
+
+如果终端显示 `Workspace directory is not available`，先确认 Worker 的 `AGENTMUX_WORKDIR` 没有被清理，并检查 Workspace 页面记录的 `localPath`。如果 Worker 重启，重新启动 Worker 后发送第一条命令即可让它在同一路径重新接管终端；如果命令停留在 `claimed` 超过一分钟，下一次轮询会自动重新排队。
+
 控制面只把 Workspace 元数据写入 D1，不上传源码和 Git 凭据。Worker 在 `claiming` / `preparing` 阶段断线超过一分钟后，原 Worker 下一次轮询会重新领取并继续准备；`stopped` / `failed` 工作区可由控制台 **Queue again**。
 
 生产环境建议使用系统服务和本机 Secret Store 注入变量，不要把 Token 写入仓库、Shell 历史或镜像。

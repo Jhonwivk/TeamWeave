@@ -1,4 +1,4 @@
-import { database, jsonBody, now, requireOwner } from "@/lib/control-plane";
+import { database, jsonBody, now, requireOwner, terminalCommandId } from "@/lib/control-plane";
 
 export const dynamic = "force-dynamic";
 
@@ -19,14 +19,29 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const taskCount = await database().prepare("SELECT COUNT(*) AS count FROM tasks WHERE workspace_id = ?").bind(id).first<{ count: number }>();
     if ((taskCount?.count || 0) > 0) return Response.json({ error: "Workspace is referenced by tasks; delete those tasks first" }, { status: 409 });
     await database().batch([
+      database().prepare("DELETE FROM workspace_terminal_events WHERE workspace_id = ?").bind(id),
+      database().prepare("DELETE FROM workspace_terminal_commands WHERE workspace_id = ?").bind(id),
+      database().prepare("DELETE FROM workspace_terminals WHERE workspace_id = ?").bind(id),
       database().prepare("DELETE FROM workspace_events WHERE workspace_id = ?").bind(id),
       database().prepare("DELETE FROM development_workspaces WHERE id = ? AND owner_id = ?").bind(id, auth.ownerId),
     ]);
   } else if (payload.action === "stop" && ["queued", "claiming", "preparing", "ready", "failed"].includes(workspace.status)) {
-    await database().batch([
+    const activeTerminals = await database().prepare(
+      "SELECT id, worker_id AS workerId FROM workspace_terminals WHERE workspace_id = ? AND owner_id = ? AND status IN ('queued', 'starting', 'running', 'stopping')"
+    ).bind(id, auth.ownerId).all<{ id: string; workerId: string | null }>();
+    const statements = [
       database().prepare("UPDATE development_workspaces SET status = 'stopped', updated_at = ?, last_active_at = ? WHERE id = ?").bind(timestamp, timestamp, id),
       database().prepare("INSERT INTO workspace_events (workspace_id, kind, message, created_at) VALUES (?, 'workspace.stopped', 'Workspace stopped by operator', ?)").bind(id, timestamp),
-    ]);
+    ];
+    for (const terminal of activeTerminals.results) {
+      const commandId = terminalCommandId();
+      statements.push(
+        database().prepare("UPDATE workspace_terminals SET status = 'stopping', updated_at = ?, last_active_at = ? WHERE id = ? AND owner_id = ?").bind(timestamp, timestamp, terminal.id, auth.ownerId),
+        database().prepare("INSERT INTO workspace_terminal_commands (id, owner_id, workspace_id, terminal_id, worker_id, kind, payload, status, created_at) VALUES (?, ?, ?, ?, ?, 'stop', '{}', 'queued', ?)").bind(commandId, auth.ownerId, id, terminal.id, terminal.workerId, timestamp),
+        database().prepare("INSERT INTO workspace_terminal_events (owner_id, workspace_id, terminal_id, kind, data, payload, created_at) VALUES (?, ?, ?, 'terminal.stop_queued', 'Workspace stopped; terminal shutdown queued', ?, ?)").bind(auth.ownerId, id, terminal.id, JSON.stringify({ commandId }), timestamp),
+      );
+    }
+    await database().batch(statements);
   } else if (payload.action === "reopen" && ["stopped", "failed"].includes(workspace.status)) {
     await database().batch([
       database().prepare("UPDATE development_workspaces SET status = 'queued', worker_id = NULL, error = NULL, updated_at = ?, last_active_at = ? WHERE id = ?").bind(timestamp, timestamp, id),

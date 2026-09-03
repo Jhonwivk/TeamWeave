@@ -55,7 +55,7 @@ button { cursor: pointer; }
 .actor-amber { color: #fcd34d; background: #f59e0b1a; }
 .status { display: inline-flex; align-items: center; border-radius: 999px; padding: .25rem .5rem; font-size: .625rem; font-weight: 600; letter-spacing: .02em; }
 .status-queued { color: #cbd5e1; background: #94a3b81a; }
-.status-claimed, .status-running, .status-starting, .status-working, .status-resume_requested, .status-resuming, .status-claiming, .status-preparing { color: #67e8f9; background: #22d3ee1a; }
+.status-claimed, .status-running, .status-starting, .status-working, .status-resume_requested, .status-resuming, .status-claiming, .status-preparing, .status-stopping { color: #67e8f9; background: #22d3ee1a; }
 .status-review, .status-blocked { color: #fcd34d; background: #f59e0b1a; }
 .status-publish_requested, .status-publishing { color: #c4b5fd; background: #8b5cf61c; }
 .status-done, .status-acknowledged { color: #6ee7b7; background: #10b9811a; }

@@ -216,6 +216,55 @@ Action 与当前状态不匹配时返回 `409`。
 
 支持 `stop`（停止排队或就绪工作区）、`reopen`（将 `stopped` / `failed` 工作区重新排队）和 `delete`（仅删除没有关联 Task 的 `stopped` / `failed` 工作区）。
 
+### GET /api/workspaces/:id/terminal
+
+读取工作区最近一个终端会话及增量事件。传入 `terminalId` 可指定会话，传入 `after` 只返回事件 ID 大于该值的记录。
+
+```json
+{
+  "terminal": {
+    "id": "term_...",
+    "workspaceId": "ws_...",
+    "shell": "bash",
+    "cwd": "/Users/me/.agentmux/workspaces/ws_...",
+    "status": "running",
+    "pid": 4812,
+    "cols": 120,
+    "rows": 32
+  },
+  "events": [
+    {
+      "id": 18,
+      "kind": "terminal.output",
+      "data": "git status\\n",
+      "payload": { "stream": "stdout" },
+      "createdAt": 1788316800000
+    }
+  ],
+  "nextAfter": 18
+}
+```
+
+### POST /api/workspaces/:id/terminal
+
+在 READY 工作区创建或控制终端。所有动作都会先写入 D1 命令队列，再由绑定 Workspace 的 Worker 领取。
+
+启动（重复启动会复用当前活动会话）：
+
+```json
+{ "action": "start", "shell": "bash", "cols": 120, "rows": 32 }
+```
+
+发送输入、调整尺寸或停止：
+
+```json
+{ "action": "input", "terminalId": "term_...", "data": "npm install\\n" }
+{ "action": "resize", "terminalId": "term_...", "cols": 140, "rows": 40 }
+{ "action": "stop", "terminalId": "term_..." }
+```
+
+支持的 Shell 名称为 `bash`、`zsh`、`sh`，Windows Worker 另支持 `powershell`、`pwsh` 和 `cmd`。Workspace 未达到 `ready` 时返回 `409`。
+
 ## Worker 接口
 
 ### POST /api/worker/poll
@@ -255,6 +304,7 @@ Action 与当前状态不匹配时返回 `409`。
 - `resume`：向原活动 Session 投递人工回复并继续；
 - `publish`：推送分支并创建 PR。
 - `workspace`：准备或恢复一个 Development Workspace；返回值包含 `workspace` 元数据，不包含 Agent Session。
+- `terminal`：执行一个 Workspace Terminal 命令；返回 `terminal`、`workspace` 和待执行的 `command`。
 
 没有匹配作业时返回：
 
@@ -329,6 +379,27 @@ Worker 也可以用同一接口上报 Workspace 生命周期：将 `workspaceId`
 
 `worker.heartbeat` 只刷新时间，不写 Task Event。其他 `kind` 会追加到事件时间线。
 
+### POST /api/worker/terminal
+
+Worker 用该接口回传终端状态、Shell 输出和命令完成结果。请求必须带 Worker Bearer Token，并且 `terminalId` 必须属于当前 Worker 领取的 Workspace。
+
+```json
+{
+  "terminalId": "term_...",
+  "commandId": "termcmd_...",
+  "kind": "terminal.output",
+  "data": "npm install\\n",
+  "payload": { "stream": "stdout" },
+  "terminal": {
+    "status": "running",
+    "pid": 4812,
+    "cwd": "/Users/me/.agentmux/workspaces/ws_..."
+  }
+}
+```
+
+输出事件不会修改命令状态；`terminal.command_done` / `terminal.command_failed` 会分别把队列命令标为完成或失败。终端状态支持 `queued`、`starting`、`running`、`stopping`、`exited`、`stopped` 和 `failed`。
+
 ## 状态机
 
 ```mermaid
@@ -366,6 +437,12 @@ stateDiagram-v2
 | `decision.approved` | 用户批准创建 PR |
 | `github.pr_created` | PR 创建成功 |
 | `worker.failed` | Worker 无法完成当前作业 |
+| `terminal.output` | Shell stdout/stderr 增量输出 |
+| `terminal.input` | Worker 已写入 Shell 的输入 |
+| `terminal.started` | Shell 已在 Workspace checkout 启动 |
+| `terminal.exited` | Shell 自然退出 |
+| `terminal.stopped` | 用户请求停止 Shell |
+| `terminal.command_failed` | 终端命令无法执行 |
 
 客户端应把 `kind` 当作可扩展字符串，并以 Task `status` 作为主要状态来源。
 

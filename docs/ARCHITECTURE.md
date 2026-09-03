@@ -9,7 +9,7 @@
 | Web Console | 创建任务、查看进度、回复阻塞问题、批准发布 | 不直接运行 Agent，不保存 GitHub 凭据 |
 | Control Plane API | 鉴权、调度、持久化任务/Session/消息/事件 | 不访问本地工作区 |
 | D1 | 保存控制面状态与可恢复的通信记录 | 不保存代码仓库和 Agent 登录态 |
-| Local Worker | 领取任务、准备 Git 分支、驱动 Runtime、上报状态 | 不替控制面做用户授权决策 |
+| Local Worker | 领取任务、准备 Git 分支、驱动 Runtime、托管 Workspace Shell、上报状态 | 不替控制面做用户授权决策 |
 | Herdr Runtime | 管理持久终端、Pane 和 Agent 进程 | 不定义任务语义和权限策略 |
 | Agent CLI | 通过 Actor Registry 接入主流 Coding Agent，执行真实代码工作 | 不持有 TeamWeave Worker Token |
 | GitHub | 保存分支和 Pull Request | 不承担 Session 间消息传递 |
@@ -26,6 +26,9 @@ erDiagram
     REPOSITORY ||--o{ DEVELOPMENT_WORKSPACE : opens
     WORKER ||--o{ DEVELOPMENT_WORKSPACE : prepares
     DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_EVENT : records
+    DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_TERMINAL : exposes
+    WORKSPACE_TERMINAL ||--o{ TERMINAL_COMMAND : queues
+    WORKSPACE_TERMINAL ||--o{ TERMINAL_EVENT : records
     DEVELOPMENT_WORKSPACE o|--o{ TASK : hosts
     AGENT_SESSION o|--o{ SESSION_MESSAGE : sends
     AGENT_SESSION o|--o{ SESSION_MESSAGE : receives
@@ -36,6 +39,14 @@ erDiagram
 Development Workspace 是仓库级、可复用的本地开发 checkout。它保存 `repositoryId`、可选的 `workerId`、本地路径、`baseBranch`、`workingBranch`、生命周期状态和最近活跃时间。状态按 `queued → claiming → preparing → ready` 推进，也可以进入 `failed` 或由用户 `stopped`；`claiming` / `preparing` 超过恢复窗口后，原 Worker 可以重新领取。
 
 创建 Workspace 只在控制面写入元数据，不上传源码或 Git 凭据。Worker 领取后负责 clone/reuse 仓库、fetch、从基础分支创建隔离工作分支，并通过 `/api/worker/events` 回报本地路径和状态。关联 Task 会等待 Workspace `ready` 后再被 Worker 领取，从而让后续 Terminal、Agent 和 Preview 共用同一 checkout。
+
+### Workspace Terminal
+
+Terminal 是 Development Workspace 下的第二类可执行作业，与 Agent Session 共用同一个本地 checkout，但不把 Shell 进程放进 Cloudflare 控制面。浏览器只提交 `start`、`input`、`resize`、`stop` 命令；控制面把命令写入 `workspace_terminal_commands`，绑定该 Workspace 的 Worker 通过轮询原子领取。
+
+Worker 在本机启动交互 Shell，维护 `terminalId → child process` 映射，并把 stdout/stderr 分块回传到 `workspace_terminal_events`。浏览器用 `after` 游标每 900ms 增量读取事件，所以输出具有实时体验，同时保留了跨窗口重连所需的历史。Worker 重启后，下一条输入会按同一个工作区路径重新建立 Shell；命令租约超过一分钟会回到队列。
+
+终端运行在 Worker 的 `AGENTMUX_WORKDIR` 子目录中，Shell 环境会移除 TeamWeave Worker Token 和常见 GitHub Token。Workspace `localPath` 只作为 Worker 已经创建的本地路径提示，服务端不会读取或上传该目录内容。
 
 ### Task
 

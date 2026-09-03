@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowRight, Bot, Check, ChevronRight, Code2, Copy, Cpu, Download, ExternalLink, FolderOpen, GitBranch, GitFork, Laptop, Layers3, Loader2, MessageSquareText, Plus, RefreshCw, Search, Server, Settings2, ShieldCheck, Sparkles, TerminalSquare, Trash2, UserRound, UserRoundCheck, UsersRound, Wifi, WifiOff, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,6 +12,8 @@ type Repository = { id: string; fullName: string; url: string; defaultBranch: st
 type Worker = { id: string; name: string; platform: string; capabilities: string[]; runtimes: string[]; lastSeenAt: number | null; createdAt: number };
 type Workspace = { id: string; repositoryId: string; workerId: string | null; localPath: string | null; baseBranch: string; workingBranch: string | null; status: "queued" | "claiming" | "preparing" | "ready" | "stopped" | "failed" | string; error: string | null; createdAt: number; lastActiveAt: number; updatedAt: number; repository?: string; repositoryUrl?: string };
 type WorkspaceEvent = { id: number; workspaceId: string; kind: string; message: string; payload: Record<string, unknown> | null; createdAt: number };
+type TerminalSession = { id: string; ownerId: string; workspaceId: string; workerId: string | null; shell: string; cwd: string | null; cols: number; rows: number; pid: number | null; status: string; exitCode: number | null; error: string | null; createdAt: number; lastActiveAt: number; updatedAt: number };
+type TerminalEvent = { id: number; ownerId: string; workspaceId: string; terminalId: string; kind: string; data: string | null; payload: Record<string, unknown> | null; createdAt: number };
 type Task = { id: string; repositoryId: string; workspaceId: string | null; title: string; prompt: string; actor: ActorId; model: string | null; mode: "single" | "multi"; runtime: "auto" | "herdr" | "direct"; activeSessionId: string | null; baseBranch: string; workBranch: string | null; status: string; workerId: string | null; attempt: number; summary: string | null; diffStat: string | null; prUrl: string | null; error: string | null; createdAt: number; updatedAt: number };
 type AgentSession = { id: string; taskId: string; actor: ActorId; role: string; model: string | null; ordinal: number; status: string; runtime: string | null; runtimeName: string | null; workspaceId: string | null; paneId: string | null; summary: string | null; createdAt: number; updatedAt: number };
 type SessionMessage = { id: string; taskId: string; fromSessionId: string | null; toSessionId: string | null; kind: string; body: string; artifacts: string[]; gitRef: string | null; status: string; createdAt: number; deliveredAt: number | null; acknowledgedAt: number | null };
@@ -63,6 +65,7 @@ export default function AgentConsole() {
   const [repoOpen, setRepoOpen] = useState(false);
   const [workerOpen, setWorkerOpen] = useState(false);
   const [selected, setSelected] = useState<Task | null>(null);
+  const [terminalWorkspace, setTerminalWorkspace] = useState<Workspace | null>(null);
   const [actor, setActor] = useState<ActorId>("codex");
   const [mode, setMode] = useState<"single" | "multi">("single");
   const [runtime, setRuntime] = useState<"auto" | "herdr" | "direct">("auto");
@@ -189,7 +192,7 @@ export default function AgentConsole() {
 
           <TabsContent value="repositories"><section className="space-y-4"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Connected repositories</h2><p className="mt-1 text-sm text-white/40">Git credentials never leave your worker machine.</p></div><Button onClick={() => setRepoOpen(true)} className="bg-violet-500 text-white hover:bg-violet-400"><Plus /> Connect</Button></div>{state.repositories.length ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{state.repositories.map((repo) => { const workspace = workspaceByRepository.get(repo.id); return <article key={repo.id} className="rounded-2xl border border-white/8 bg-[#0d101a] p-5"><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl bg-white/6"><GitFork className="size-5" /></div><span className="rounded-full bg-white/6 px-2 py-1 text-xs capitalize text-white/45">{repo.visibility}</span></div><h3 className="mt-5 font-semibold">{repo.fullName}</h3><div className="mt-3 flex items-center gap-2 text-xs text-white/38"><GitBranch className="size-3.5" />{repo.defaultBranch}</div>{workspace && <div className="mt-4 rounded-xl border border-violet-400/12 bg-violet-400/5 p-3"><div className="flex items-center justify-between text-xs"><span className="flex items-center gap-1.5 text-violet-200"><FolderOpen className="size-3.5" />Workspace</span><span className={`status status-${workspace.status}`}>{workspace.status}</span></div><div className="mt-2 truncate font-mono text-[11px] text-white/35">{workspace.workingBranch || "branch pending"}</div></div>}<div className="mt-5 flex flex-wrap items-center gap-3"><Button variant="outline" disabled={busy || ["queued", "claiming", "preparing", "ready"].includes(workspace?.status || "")} onClick={() => void openWorkspace(repo)} className="h-9 border-white/10 bg-transparent text-white hover:bg-white/8"><FolderOpen className="size-3.5" />{workspace ? "Reopen workspace" : "Open workspace"}</Button><a href={`https://github.com/${repo.fullName}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-violet-300 hover:text-violet-200">GitHub <ExternalLink className="size-3.5" /></a></div></article>; })}</div> : <Empty icon={GitFork} title="No repositories yet" text="Connect a public or private GitHub repository by its owner/name." action="Connect repository" onAction={() => setRepoOpen(true)} />}</section></TabsContent>
 
-          <TabsContent value="workspaces"><section className="space-y-4"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Development workspaces</h2><p className="mt-1 text-sm text-white/40">A worker clones or reuses the repository, creates one isolated branch, and keeps the path ready for future terminal and preview sessions.</p></div><Button onClick={() => setRepoOpen(true)} variant="outline" className="border-white/10 bg-transparent text-white hover:bg-white/8"><Plus /> Connect repo</Button></div>{state.workspaces.length ? <div className="grid gap-4 lg:grid-cols-2">{state.workspaces.map((workspace) => <article key={workspace.id} className="rounded-2xl border border-white/8 bg-[#0d101a] p-5"><div className="flex items-start justify-between gap-4"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-violet-400/10 text-violet-200"><FolderOpen className="size-5" /></div><div><h3 className="font-semibold">{workspace.repository || "Repository workspace"}</h3><p className="mt-1 text-xs text-white/35">{workspace.id}</p></div></div><span className={`status status-${workspace.status}`}>{workspace.status}</span></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><Meta icon={GitBranch} label="Base branch" value={workspace.baseBranch} /><Meta icon={GitBranch} label="Working branch" value={workspace.workingBranch || "Pending worker"} /></div><div className="mt-3 rounded-xl bg-white/[.035] p-3"><div className="text-[11px] text-white/30">Local path</div><div className="mt-1 truncate font-mono text-xs text-cyan-100/60">{workspace.localPath || "Waiting for a worker to prepare this checkout"}</div></div>{workspace.error && <div className="mt-3 rounded-lg bg-rose-400/6 p-3 text-xs leading-5 text-rose-100/70">{workspace.error}</div>}<div className="mt-4 flex items-center justify-between text-xs text-white/35"><span>{workspace.workerId ? workerById.get(workspace.workerId)?.name || "Assigned worker" : "Waiting for worker"}</span><span>{relative(workspace.updatedAt)}</span></div><div className="mt-4 flex gap-2">{["queued", "claiming", "preparing", "ready"].includes(workspace.status) && <Button variant="outline" disabled={busy} onClick={() => void workspaceAction(workspace, "stop")} className="border-white/10 bg-transparent text-white hover:bg-white/8">Stop workspace</Button>}{["stopped", "failed"].includes(workspace.status) && <><Button disabled={busy} onClick={() => void workspaceAction(workspace, "reopen")} className="bg-violet-500 text-white hover:bg-violet-400">Queue again</Button><Button variant="ghost" disabled={busy} onClick={() => void workspaceAction(workspace, "delete")} className="text-rose-200/70 hover:bg-rose-400/10 hover:text-rose-100"><Trash2 className="size-3.5" />Delete</Button></>}</div></article>)}</div> : <Empty icon={FolderOpen} title="No development workspaces" text="Open a workspace from a connected repository. Your local worker will prepare the checkout and report its branch and path here." action="Connect repository" onAction={() => setRepoOpen(true)} />}</section></TabsContent>
+          <TabsContent value="workspaces"><section className="space-y-4"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Development workspaces</h2><p className="mt-1 text-sm text-white/40">A worker clones or reuses the repository, creates one isolated branch, and keeps the path ready for terminal and preview sessions.</p></div><Button onClick={() => setRepoOpen(true)} variant="outline" className="border-white/10 bg-transparent text-white hover:bg-white/8"><Plus /> Connect repo</Button></div>{state.workspaces.length ? <div className="grid gap-4 lg:grid-cols-2">{state.workspaces.map((workspace) => <article key={workspace.id} className="rounded-2xl border border-white/8 bg-[#0d101a] p-5"><div className="flex items-start justify-between gap-4"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-violet-400/10 text-violet-200"><FolderOpen className="size-5" /></div><div><h3 className="font-semibold">{workspace.repository || "Repository workspace"}</h3><p className="mt-1 text-xs text-white/35">{workspace.id}</p></div></div><span className={`status status-${workspace.status}`}>{workspace.status}</span></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><Meta icon={GitBranch} label="Base branch" value={workspace.baseBranch} /><Meta icon={GitBranch} label="Working branch" value={workspace.workingBranch || "Pending worker"} /></div><div className="mt-3 rounded-xl bg-white/[.035] p-3"><div className="text-[11px] text-white/30">Local path</div><div className="mt-1 truncate font-mono text-xs text-cyan-100/60">{workspace.localPath || "Waiting for a worker to prepare this checkout"}</div></div>{workspace.error && <div className="mt-3 rounded-lg bg-rose-400/6 p-3 text-xs leading-5 text-rose-100/70">{workspace.error}</div>}<div className="mt-4 flex items-center justify-between text-xs text-white/35"><span>{workspace.workerId ? workerById.get(workspace.workerId)?.name || "Assigned worker" : "Waiting for worker"}</span><span>{relative(workspace.updatedAt)}</span></div><div className="mt-4 flex flex-wrap gap-2">{workspace.status === "ready" && <Button onClick={() => setTerminalWorkspace(workspace)} className="bg-cyan-500 text-[#061219] hover:bg-cyan-400"><TerminalSquare className="size-3.5" />Terminal</Button>}{["queued", "claiming", "preparing", "ready"].includes(workspace.status) && <Button variant="outline" disabled={busy} onClick={() => void workspaceAction(workspace, "stop")} className="border-white/10 bg-transparent text-white hover:bg-white/8">Stop workspace</Button>}{["stopped", "failed"].includes(workspace.status) && <><Button disabled={busy} onClick={() => void workspaceAction(workspace, "reopen")} className="bg-violet-500 text-white hover:bg-violet-400">Queue again</Button><Button variant="ghost" disabled={busy} onClick={() => void workspaceAction(workspace, "delete")} className="text-rose-200/70 hover:bg-rose-400/10 hover:text-rose-100"><Trash2 className="size-3.5" />Delete</Button></>}</div></article>)}</div> : <Empty icon={FolderOpen} title="No development workspaces" text="Open a workspace from a connected repository. Your local worker will prepare the checkout and report its branch and path here." action="Connect repository" onAction={() => setRepoOpen(true)} />}</section></TabsContent>
 
           <TabsContent value="workers"><section className="space-y-4"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Execution workers</h2><p className="mt-1 text-sm text-white/40">Workers detect installed actors and the Herdr runtime automatically.</p></div><Button onClick={() => setWorkerOpen(true)} className="bg-violet-500 text-white hover:bg-violet-400"><Plus /> Register worker</Button></div>{state.workers.length ? <div className="grid gap-4 lg:grid-cols-3">{state.workers.map((worker) => { const online = !!worker.lastSeenAt && state.serverTime - worker.lastSeenAt < 15000; return <article key={worker.id} className="rounded-2xl border border-white/8 bg-[#0d101a] p-5"><div className="flex items-start justify-between"><div className="grid size-10 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300"><Server className="size-5" /></div><span className={`flex items-center gap-1.5 text-xs ${online ? "text-emerald-300" : "text-white/35"}`}><span className={`size-1.5 rounded-full ${online ? "bg-emerald-300" : "bg-white/25"}`} />{online ? "Online" : "Offline"}</span></div><h3 className="mt-5 font-semibold">{worker.name}</h3><p className="mt-1 truncate text-xs text-white/35">{worker.platform}</p><div className="mt-5 flex flex-wrap gap-2">{worker.runtimes?.map((runtime) => <span key={runtime} className={`rounded-lg px-2.5 py-1.5 text-xs ${runtime === "herdr" ? "bg-violet-400/12 text-violet-200" : "bg-white/6 text-white/55"}`}>{runtime === "herdr" ? "Herdr" : "Direct"}</span>)}{worker.capabilities.length ? worker.capabilities.map((actor) => <span key={actor} className="rounded-lg bg-white/6 px-2.5 py-1.5 text-xs capitalize text-white/65">{actors.find((item) => item.id === actor)?.name || actor}</span>) : <span className="text-xs text-amber-300/70">Worker has not connected yet</span>}</div></article>; })}</div> : <Empty icon={Server} title="No workers registered" text="Register this Mac with any supported coding agent installed, such as Codex, Claude, Gemini, Cursor, Copilot, OpenCode, Qwen, or Aider." action="Set up worker" onAction={() => setWorkerOpen(true)} />}</section></TabsContent>
 
@@ -198,6 +201,8 @@ export default function AgentConsole() {
       </div>
 
       <Dialog open={repoOpen} onOpenChange={setRepoOpen}><DialogContent className="border-white/10 bg-[#121622] text-white sm:max-w-lg"><DialogHeader><DialogTitle>Connect GitHub repository</DialogTitle><DialogDescription className="text-white/42">Use owner/repository. Private access is checked by GitHub CLI on your local worker.</DialogDescription></DialogHeader><form action={addRepository} className="space-y-4"><Field label="Repository"><input name="fullName" className="field" placeholder="owner/repository" required autoFocus /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Default branch"><input name="defaultBranch" className="field" defaultValue="main" required /></Field><Field label="Visibility"><select name="visibility" className="field"><option value="unknown">Auto / unknown</option><option value="public">Public</option><option value="private">Private</option></select></Field></div><DialogFooter><Button type="button" variant="ghost" onClick={() => setRepoOpen(false)} className="text-white/55 hover:bg-white/8 hover:text-white">Cancel</Button><Button disabled={busy} className="bg-violet-500 text-white hover:bg-violet-400">{busy && <Loader2 className="animate-spin" />}<GitFork /> Connect</Button></DialogFooter></form></DialogContent></Dialog>
+
+      <Dialog open={!!terminalWorkspace} onOpenChange={(open) => !open && setTerminalWorkspace(null)}><DialogContent className="border-white/10 bg-[#0d111a] p-0 text-white sm:max-w-5xl"><div className="p-5"><DialogHeader><DialogTitle>Workspace terminal</DialogTitle><DialogDescription className="text-white/42">Interactive shell on the worker checkout. Commands run on the workspace branch and stay local to your machine.</DialogDescription></DialogHeader>{terminalWorkspace && <WorkspaceTerminal workspace={terminalWorkspace} />}</div></DialogContent></Dialog>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="max-h-[92vh] overflow-y-auto border-white/10 bg-[#121622] text-white sm:max-w-2xl"><DialogHeader><DialogTitle>Create agent task</DialogTitle><DialogDescription className="text-white/42">Choose one agent for focused work or a sequence of sessions with durable handoffs.</DialogDescription></DialogHeader><form action={addTask} className="space-y-5">
         <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#090c13] p-1.5"><button type="button" onClick={() => setMode("single")} className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm transition ${mode === "single" ? "bg-violet-500 text-white" : "text-white/45 hover:bg-white/5"}`}><UserRound className="size-4" />Single agent</button><button type="button" onClick={() => setMode("multi")} className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm transition ${mode === "multi" ? "bg-violet-500 text-white" : "text-white/45 hover:bg-white/5"}`}><UsersRound className="size-4" />Agent workflow</button></div>
@@ -247,4 +252,85 @@ function Control({ label }: { label: string }) { return <div className="flex ite
 function Step({ number, text }: { number: string; text: string }) { return <div className="rounded-xl bg-white/[.035] p-3"><div className="text-xs font-medium text-violet-300">{number}</div><div className="mt-1.5 text-xs leading-5 text-white/45">{text}</div></div>; }
 function Empty({ icon: Icon, title, text, action, onAction }: { icon: typeof Bot; title: string; text: string; action: string; onAction: () => void }) { return <section className="grid min-h-72 place-items-center rounded-2xl border border-dashed border-white/10 bg-white/[.018] p-8 text-center"><div><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-violet-400/10 text-violet-300"><Icon className="size-5" /></div><h2 className="mt-4 font-semibold">{title}</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-white/40">{text}</p><Button onClick={onAction} className="mt-5 bg-violet-500 text-white hover:bg-violet-400">{action}<ChevronRight /></Button></div></section>; }
 function Loading() { return <div className="grid min-h-72 place-items-center"><Loader2 className="size-6 animate-spin text-violet-300" /></div>; }
+function WorkspaceTerminal({ workspace }: { workspace: Workspace }) {
+  const [terminal, setTerminal] = useState<TerminalSession | null>(null);
+  const [events, setEvents] = useState<TerminalEvent[]>([]);
+  const [line, setLine] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const cursorRef = useRef(0);
+  const terminalId = terminal?.id;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function boot() {
+      try {
+        const result = await requestJson<{ terminal: TerminalSession; commandId: string }>(`/api/workspaces/${workspace.id}/terminal`, {
+          method: "POST",
+          body: JSON.stringify({ action: "start", cols: 120, rows: 32 }),
+        });
+        if (!cancelled) {
+          cursorRef.current = 0;
+          setEvents([]);
+          setTerminal(result.terminal);
+          setError(null);
+        }
+      } catch (bootError) {
+        if (!cancelled) setError(bootError instanceof Error ? bootError.message : "Could not start terminal");
+      }
+    }
+    void boot();
+    return () => { cancelled = true; };
+  }, [workspace.id]);
+
+  useEffect(() => {
+    const activeTerminalId = terminalId;
+    if (!activeTerminalId) return;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const result = await requestJson<{ terminal: TerminalSession; events: TerminalEvent[]; nextAfter: number }>(
+          `/api/workspaces/${workspace.id}/terminal?terminalId=${encodeURIComponent(String(activeTerminalId))}&after=${cursorRef.current}`,
+          { cache: "no-store" },
+        );
+        if (cancelled) return;
+        setTerminal(result.terminal);
+        if (result.events.length) setEvents((current) => [...current, ...result.events].slice(-800));
+        cursorRef.current = Math.max(cursorRef.current, result.nextAfter);
+        setError(result.terminal.error);
+      } catch (pollError) {
+        if (!cancelled) setError(pollError instanceof Error ? pollError.message : "Terminal connection lost");
+      }
+    }
+    void poll();
+    const timer = window.setInterval(() => void poll(), 900);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [terminalId, workspace.id]);
+
+  async function sendInput(data: string) {
+    if (!terminal || ["stopped", "exited", "failed", "stopping"].includes(terminal.status)) return;
+    setBusy(true);
+    try {
+      await requestJson(`/api/workspaces/${workspace.id}/terminal`, { method: "POST", body: JSON.stringify({ action: "input", terminalId: terminal.id, data }) });
+      setLine("");
+      setError(null);
+    } catch (inputError) {
+      setError(inputError instanceof Error ? inputError.message : "Could not send terminal input");
+    } finally { setBusy(false); }
+  }
+
+  async function stopTerminal() {
+    if (!terminal || terminal.status === "stopped") return;
+    setBusy(true);
+    try {
+      const result = await requestJson<{ terminal: TerminalSession }>(`/api/workspaces/${workspace.id}/terminal`, { method: "POST", body: JSON.stringify({ action: "stop", terminalId: terminal.id }) });
+      setTerminal(result.terminal);
+    } catch (stopError) {
+      setError(stopError instanceof Error ? stopError.message : "Could not stop terminal");
+    } finally { setBusy(false); }
+  }
+
+  const terminalState = terminal?.status || "connecting";
+  return <div className="mt-5 space-y-3"><div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#090c13] px-4 py-3"><div className="flex min-w-0 items-center gap-3"><div className={`size-2 rounded-full ${terminalState === "running" ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,.7)]" : terminalState === "failed" ? "bg-rose-300" : "bg-amber-300"}`} /><div className="min-w-0"><div className="flex items-center gap-2 text-sm font-medium"><span>{terminal?.shell || "shell"}</span><span className={`status status-${terminalState}`}>{terminalState}</span></div><div className="mt-1 truncate font-mono text-[11px] text-white/32">{workspace.localPath || terminal?.cwd || "Waiting for workspace path"} · {workspace.workingBranch || "branch"}</div></div></div><Button variant="outline" disabled={busy || !terminal || ["stopped", "exited"].includes(terminal.status)} onClick={() => void stopTerminal()} className="h-8 border-rose-400/20 bg-transparent text-rose-200 hover:bg-rose-400/10"><XCircle className="size-3.5" />Stop</Button></div><div className="overflow-hidden rounded-xl border border-white/8 bg-[#05070b] shadow-inner"><div className="flex items-center justify-between border-b border-white/6 px-4 py-2 text-[11px] text-white/30"><span className="font-mono">~/workspace</span><span>{events.length} events</span></div><div className="scrollbar-thin h-[360px] overflow-y-auto p-4 font-mono text-xs leading-5 text-cyan-100/75">{events.length ? events.map((event) => <div key={event.id} className={event.kind === "terminal.input" ? "text-violet-200" : event.kind.includes("failed") ? "text-rose-200" : "whitespace-pre-wrap"}>{event.kind === "terminal.input" ? `$ ${event.data || ""}` : event.data || `[${event.kind}]`}</div>) : <div className="text-white/30">{error || "Connecting to the local worker…"}</div>}</div><form onSubmit={(event) => { event.preventDefault(); void sendInput(`${line}\n`); }} className="flex items-center gap-2 border-t border-white/6 px-4 py-3"><span className="font-mono text-xs text-emerald-300">$</span><input value={line} onChange={(event) => setLine(event.target.value)} onKeyDown={(event) => { if (event.ctrlKey && event.key.toLowerCase() === "c") { event.preventDefault(); void sendInput("\u0003"); } }} disabled={busy || terminalState !== "running"} className="min-w-0 flex-1 bg-transparent font-mono text-xs text-white outline-none placeholder:text-white/25" placeholder={terminalState === "running" ? "npm install · git status · npm run dev" : "Waiting for shell…"} aria-label="Terminal command" autoFocus /></form></div>{error && <div className="rounded-lg border border-rose-400/15 bg-rose-400/6 px-3 py-2 text-xs leading-5 text-rose-100/70">{error}</div>}<div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] text-white/32"><span>Commands execute on the local worker</span><span>Ctrl+C sends an interrupt</span><span>Terminal stays alive when this window closes</span></div></div>;
+}
 function relative(timestamp: number) { const seconds = Math.max(1, Math.round((Date.now() - timestamp) / 1000)); if (seconds < 60) return `${seconds}s ago`; if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`; return new Date(timestamp).toLocaleDateString(); }

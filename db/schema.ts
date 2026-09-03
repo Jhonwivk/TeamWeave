@@ -58,6 +58,58 @@ export const workspaceEvents = sqliteTable("workspace_events", {
   index("idx_workspace_events_workspace_created").on(table.workspaceId, table.createdAt),
 ]);
 
+export const workspaceTerminals = sqliteTable("workspace_terminals", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  workerId: text("worker_id").references(() => workers.id),
+  shell: text("shell").notNull().default("bash"),
+  cwd: text("cwd"),
+  cols: integer("cols").notNull().default(120),
+  rows: integer("rows").notNull().default(32),
+  pid: integer("pid"),
+  status: text("status").notNull().default("queued"),
+  exitCode: integer("exit_code"),
+  error: text("error"),
+  createdAt: integer("created_at").notNull(),
+  lastActiveAt: integer("last_active_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("idx_workspace_terminals_owner_workspace_status").on(table.ownerId, table.workspaceId, table.status),
+  index("idx_workspace_terminals_worker_status").on(table.workerId, table.status),
+]);
+
+export const workspaceTerminalCommands = sqliteTable("workspace_terminal_commands", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  terminalId: text("terminal_id").notNull().references(() => workspaceTerminals.id),
+  workerId: text("worker_id").references(() => workers.id),
+  kind: text("kind").notNull(),
+  payload: text("payload"),
+  status: text("status").notNull().default("queued"),
+  error: text("error"),
+  createdAt: integer("created_at").notNull(),
+  claimedAt: integer("claimed_at"),
+  completedAt: integer("completed_at"),
+}, (table) => [
+  index("idx_workspace_terminal_commands_workspace_status_created").on(table.workspaceId, table.status, table.createdAt),
+  index("idx_workspace_terminal_commands_worker_status").on(table.workerId, table.status),
+]);
+
+export const workspaceTerminalEvents = sqliteTable("workspace_terminal_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerId: text("owner_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  terminalId: text("terminal_id").notNull().references(() => workspaceTerminals.id),
+  kind: text("kind").notNull(),
+  data: text("data"),
+  payload: text("payload"),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_workspace_terminal_events_terminal_created").on(table.terminalId, table.createdAt),
+]);
+
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull(),

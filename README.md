@@ -4,7 +4,7 @@ TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把�
 
 它不是聊天界面，也不把多个模型简单放进同一个群聊。控制面保存任务、Session、handoff、执行事件与人工决策；本地 Worker 负责调用真实 Agent、管理 Git 分支，并在批准后创建 Pull Request。
 
-> 当前状态：V0.2 / TW-23 已完成。除原有 Agent 控制面外，支持持久化 Development Workspace、本地 Worker 生命周期、隔离分支、可恢复的 clone/reuse，以及浏览器 Terminal 到本地 Worker Shell 的交互链路。
+> 当前状态：V0.2 / TW-26 Workspace Shell UI 已完成第一版。除原有 Agent 控制面外，支持持久化 Development Workspace、本地 Worker 生命周期、隔离分支、可恢复的 clone/reuse、浏览器 Terminal，以及把 Collaboration、Files、Git、Preview、Terminal、Agent Runs 收进同一工作区界面。
 
 ## 核心能力
 
@@ -18,6 +18,7 @@ TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把�
 | Git 隔离 | 每个任务使用独立分支，多 Session 顺序修改同一分支 |
 | Development Workspace | 从 GitHub 仓库创建可复用的本地 checkout；Worker 负责 clone/reuse、分支初始化、READY/FAILED 状态和断线恢复 |
 | Browser Terminal | 在 READY 工作区中打开本地 Shell；浏览器输入通过控制面排队到 Worker，输出持久化后实时回传 |
+| Workspace Shell UI | 从仓库或 Workspace 卡片进入统一开发界面；在同一屏切换项目、发起任务、查看 Session、进入审核，并操作 Files/Git/Preview/Terminal/Agent Runs |
 | GitHub 交付 | 分支先供人工检查，批准后才创建 PR；不会自动合并 |
 | 故障恢复 | Worker 心跳、任务重领、Herdr Session 标识和幂等消息 |
 
@@ -97,7 +98,7 @@ herdr
 
 在 **Repositories** 页面点击 **Open workspace**，控制面会创建一个持久化 Development Workspace。Worker 领取后会在本机 `AGENTMUX_WORKDIR` 下为仓库 clone 或复用 checkout，创建 `teamweave/workspace-...` 工作分支，并把本地路径、分支和状态回报到 **Workspaces** 页面。工作区停止后可以重新排队；`claiming` / `preparing` 状态在 Worker 断线后会被原 Worker 恢复。
 
-工作区进入 `ready` 后，点击 **Terminal** 即可打开该 checkout 的交互 Shell。浏览器命令经过控制面写入持久化命令队列，由绑定的 Local Worker 执行；Shell 输出和状态事件写入 D1，终端窗口每秒增量读取，因此关闭窗口后重新打开仍能看到同一终端会话。Worker 会清理 TeamWeave Token 和常见 GitHub Token，不把它们注入 Shell。
+工作区创建后，点击 **Open workspace** 进入 Workspace Shell。左侧切换项目，中间的 **Collaboration** 区域发起 Agent 任务并进入回复、重试或批准流程，右侧在 **Files / Git / Preview / Terminal / Agent Runs** 之间切换。工作区进入 `ready` 后可在 **Terminal** 中打开该 checkout 的交互 Shell。浏览器命令经过控制面写入持久化命令队列，由绑定的 Local Worker 执行；Shell 输出和状态事件写入 D1，终端面板每秒增量读取，因此离开面板后重新进入仍能看到同一终端会话。Worker 会清理 TeamWeave Token 和常见 GitHub Token，不把它们注入 Shell。
 
 ### 开发验证
 

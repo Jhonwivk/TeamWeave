@@ -48,6 +48,12 @@ Worker 在本机启动交互 Shell，维护 `terminalId → child process` 映�
 
 终端运行在 Worker 的 `AGENTMUX_WORKDIR` 子目录中，Shell 环境会移除 TeamWeave Worker Token 和常见 GitHub Token。Workspace `localPath` 只作为 Worker 已经创建的本地路径提示，服务端不会读取或上传该目录内容。
 
+### Workspace Shell UI
+
+Workspace Shell 是 Development Workspace 的统一产品表面，不创建第二套 Task、Agent Session 或事件模型。左侧只负责在现有 Workspace 间导航；中间 Collaboration 面板按 `workspaceId` 聚合 Task、Session 和需要人工处理的状态；右侧 Files、Git、Preview、Terminal、Agent Runs 共享同一 Workspace 上下文。
+
+Terminal 直接复用现有持久化 Terminal API，Agent Runs 直接读取 `agent_sessions`，Git 与人工审核仍进入原有 Task Detail/PR gate。Files 与 Preview 先提供明确的能力边界和空状态，等待后续 Worker 文件索引及 TW-24/TW-25 进程、端口与私有预览数据接入；界面不会伪造本地文件或端口。
+
 ### Task
 
 一次面向仓库的工作单元。Task 保存执行模式、Runtime 偏好、基础分支、工作分支、当前活动 Session、汇总结果与 PR 地址。

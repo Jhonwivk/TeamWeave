@@ -24,6 +24,11 @@ test("ships the TeamWeave console, Herdr runtime, and cross-session protocol", a
   assert.match(consoleSource, /Development workspaces/);
   assert.match(consoleSource, /Open workspace/);
   assert.match(consoleSource, /Workspace terminal/);
+  assert.match(consoleSource, /WorkspaceShell/);
+  assert.match(consoleSource, /Collaboration/);
+  assert.match(consoleSource, /Agent Runs/);
+  assert.match(consoleSource, /Processes & ports/);
+  assert.match(consoleSource, /Start agent task/);
   assert.match(actorSource, /name: "Gemini CLI"/);
   assert.match(actorSource, /name: "GitHub Copilot"/);
   assert.match(actorSource, /id: "opencode"/);

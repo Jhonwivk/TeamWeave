@@ -1,4 +1,4 @@
-import { cleanString, database, jsonBody, now, requireWorker } from "@/lib/control-plane";
+import { cleanString, database, jsonBody, now, requireWorker, workspaceId } from "@/lib/control-plane";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +23,14 @@ type SessionMessageInput = {
   status?: string;
 };
 
+type WorkspaceUpdate = {
+  localPath?: string;
+  baseBranch?: string;
+  workingBranch?: string;
+  status?: string;
+  error?: string;
+};
+
 type EventInput = {
   taskId?: string;
   kind?: string;
@@ -37,6 +45,7 @@ type EventInput = {
   payload?: unknown;
   session?: SessionUpdate;
   sessionMessage?: SessionMessageInput;
+  workspace?: WorkspaceUpdate;
 };
 
 async function sessionBelongsToTask(sessionId: string | null, taskId: string) {
@@ -49,7 +58,9 @@ export async function POST(request: Request) {
   if ("error" in auth) return auth.error;
   const input = await jsonBody<EventInput>(request);
   const taskId = cleanString(input.taskId, 100);
-  const task = await database().prepare("SELECT id FROM tasks WHERE id = ? AND owner_id = ? AND worker_id = ?").bind(taskId, auth.worker.ownerId, auth.worker.id).first();
+  const task = await database().prepare(
+    "SELECT id, repository_id AS repositoryId FROM tasks WHERE id = ? AND owner_id = ? AND worker_id = ?"
+  ).bind(taskId, auth.worker.ownerId, auth.worker.id).first<{ id: string; repositoryId: string }>();
   if (!task) return Response.json({ error: "Assigned task not found" }, { status: 404 });
 
   const timestamp = now();
@@ -64,6 +75,58 @@ export async function POST(request: Request) {
   if (kind !== "worker.heartbeat") {
     statements.push(database().prepare("INSERT INTO task_events (task_id, kind, message, payload, created_at) VALUES (?, ?, ?, ?, ?)")
       .bind(taskId, kind, cleanString(input.message, 6000) || "Worker update", input.payload == null ? null : JSON.stringify(input.payload).slice(0, 12000), timestamp));
+  }
+
+  if (input.workspace) {
+    const workspaceStatus = ["preparing", "ready", "busy", "error", "offline"].includes(String(input.workspace.status))
+      ? String(input.workspace.status)
+      : null;
+    const localPath = cleanString(input.workspace.localPath, 2000) || null;
+    const baseBranch = cleanString(input.workspace.baseBranch, 200) || null;
+    const workingBranch = cleanString(input.workspace.workingBranch, 200) || null;
+    const workspaceError = cleanString(input.workspace.error, 8000) || null;
+    const existingWorkspace = await database().prepare(
+      "SELECT id FROM development_workspaces WHERE repository_id = ? AND worker_id = ?"
+    ).bind(task.repositoryId, auth.worker.id).first<{ id: string }>();
+    const controlWorkspaceId = existingWorkspace?.id || workspaceId();
+
+    if (!existingWorkspace && !localPath) {
+      return Response.json({ error: "New workspace requires localPath" }, { status: 400 });
+    }
+
+    if (existingWorkspace) {
+      statements.push(database().prepare(
+        `UPDATE development_workspaces
+         SET local_path = COALESCE(?, local_path),
+             base_branch = COALESCE(?, base_branch),
+             working_branch = COALESCE(?, working_branch),
+             status = COALESCE(?, status),
+             error = ?,
+             updated_at = ?,
+             last_active_at = ?
+         WHERE id = ? AND owner_id = ? AND worker_id = ?`
+      ).bind(localPath, baseBranch, workingBranch, workspaceStatus, workspaceError, timestamp, timestamp, controlWorkspaceId, auth.worker.ownerId, auth.worker.id));
+    } else {
+      statements.push(database().prepare(
+        `INSERT INTO development_workspaces
+         (id, owner_id, repository_id, worker_id, local_path, base_branch, working_branch, status, error, created_at, updated_at, last_active_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        controlWorkspaceId,
+        auth.worker.ownerId,
+        task.repositoryId,
+        auth.worker.id,
+        localPath,
+        baseBranch || "main",
+        workingBranch,
+        workspaceStatus || "preparing",
+        workspaceError,
+        timestamp,
+        timestamp,
+        timestamp,
+      ));
+    }
+    statements.push(database().prepare("UPDATE tasks SET workspace_id = ? WHERE id = ?").bind(controlWorkspaceId, taskId));
   }
 
   if (status) {

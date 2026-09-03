@@ -15,7 +15,7 @@ TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把 P
 | Agent Runtime | 优先使用 Herdr，未安装时可降级到直接 CLI |
 | 跨 Session 通信 | 持久化 handoff，包含摘要、产物路径、Git ref 和投递状态 |
 | 并行 Agent | 多 Agent 可选择 parallel 模式，各自使用 git worktree 后合并 |
-| 常用 Agent | Pi、Codex、Claude、Cursor、Aider、Gemini、OpenCode、Goose、Amazon Q 等 |
+| 常用 Agent | Pi、Codex、Claude、Cursor、Aider、Gemini、OpenCode、Goose、Amazon Q、DeepSeek Harness 等 |
 | 人工介入 | Agent 阻塞时在控制台回复，并恢复原 Herdr Session |
 | Git 隔离 | 每个任务使用独立分支，多 Session 顺序修改同一分支 |
 | GitHub 交付 | 分支先供人工检查，批准后才创建 PR；不会自动合并 |

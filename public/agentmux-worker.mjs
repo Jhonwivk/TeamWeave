@@ -20,6 +20,7 @@ const ACTOR_DETECT = [
   { id: "amazon_q", cli: "q" },
   { id: "windsurf", cli: "windsurf" },
   { id: "copilot", cli: "copilot" },
+  { id: "deepseek", cli: "dsh" },
 ];
 
 if (!CONTROL_URL || !TOKEN) {
@@ -177,6 +178,9 @@ function directActorCommand(session, prompt) {
     const args = ["-p", prompt];
     if (session.model) args.unshift("--model", String(session.model));
     return { command: "copilot", args };
+  }
+  if (session.actor === "deepseek") {
+    return { command: "dsh", args: ["--profile", "headless", prompt] };
   }
   throw new Error(`Unsupported actor: ${session.actor}`);
 }

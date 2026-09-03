@@ -20,7 +20,7 @@ type State = { repositories: Repository[]; workers: Worker[]; tasks: Task[]; eve
 type DraftStep = { actor: ActorId; role: string };
 
 const emptyState: State = { repositories: [], workers: [], tasks: [], events: [], sessions: [], messages: [], serverTime: Date.now() };
-const actorIcons = { pi: Sparkles, codex: Code2, claude: Bot, cursor: TerminalSquare, aider: Code2, gemini: Sparkles, opencode: TerminalSquare, goose: Bot, amazon_q: Cpu, windsurf: Layers3, copilot: GitFork } as const;
+const actorIcons = { pi: Sparkles, codex: Code2, claude: Bot, cursor: TerminalSquare, aider: Code2, gemini: Sparkles, opencode: TerminalSquare, goose: Bot, amazon_q: Cpu, windsurf: Layers3, copilot: GitFork, deepseek: Cpu } as const;
 const actors = SUPPORTED_ACTORS.map((id) => ({
   id,
   name: ACTOR_REGISTRY[id].name,

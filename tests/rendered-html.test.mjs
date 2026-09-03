@@ -26,7 +26,8 @@ test("ships GitHub auth, parallel execution, and expanded actor registry", async
   assert.match(tasksSource, /isSupportedActor/);
   assert.match(actorsSource, /"cursor"/);
   assert.match(actorsSource, /"aider"/);
-  assert.match(actorsSource, /"gemini"/);
+  assert.match(actorsSource, /"deepseek"/);
+  assert.match(workerSource, /"headless"/);
   assert.match(migration, /execution_strategy/);
 });
 

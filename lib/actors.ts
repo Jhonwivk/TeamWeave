@@ -10,6 +10,7 @@ export const ACTOR_IDS = [
   "amazon_q",
   "windsurf",
   "copilot",
+  "deepseek",
 ] as const;
 
 export type ActorId = (typeof ACTOR_IDS)[number];
@@ -111,6 +112,14 @@ export const ACTOR_REGISTRY: Record<ActorId, ActorDefinition> = {
     cli: "copilot",
     herdrKind: "copilot",
     tone: "sky",
+  },
+  deepseek: {
+    id: "deepseek",
+    name: "DeepSeek Harness",
+    detail: "dsh headless · plugin agent runtime",
+    cli: "dsh",
+    herdrKind: "deepseek",
+    tone: "cyan",
   },
 };
 

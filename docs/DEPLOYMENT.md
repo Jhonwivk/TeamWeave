@@ -70,7 +70,7 @@ TeamWeave 不上传这些凭据。克隆、推送和创建 PR 都由本机 `git`
 - `pi`、`codex`、`claude`
 - `dsh`（[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，安装：`npm install -g @deepseek-ai/dsh`）
 
-DeepSeek Harness 无交互模式使用 `dsh --profile headless "task"`。运行前需配置 `DEEPSEEK_API_KEY`（或 Harness 凭据服务中的等价密钥）。
+DeepSeek Harness 无交互模式使用 `dsh --profile headless "task"`。运行前需配置 `DEEPSEEK_API_KEY`（或 Harness 凭据服务中的等价密钥）。`dsh` 要求 Node.js `^22.19.0` 或 `>=24`；低于该版本会在加载插件时因缺少 `zlib.createZstdDecompress` 失败。
 
 Worker 会通过各命令的 `--version` 自动探测能力。命令必须位于启动 Worker 时的 `PATH` 中。
 

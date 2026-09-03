@@ -14,6 +14,8 @@ TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把 P
 | 多 Agent | 2–4 个 Session 按自定义角色和顺序协作 |
 | Agent Runtime | 优先使用 Herdr，未安装时可降级到直接 CLI |
 | 跨 Session 通信 | 持久化 handoff，包含摘要、产物路径、Git ref 和投递状态 |
+| 并行 Agent | 多 Agent 可选择 parallel 模式，各自使用 git worktree 后合并 |
+| 常用 Agent | Pi、Codex、Claude、Cursor、Aider、Gemini、OpenCode、Goose、Amazon Q、DeepSeek Harness 等 |
 | 人工介入 | Agent 阻塞时在控制台回复，并恢复原 Herdr Session |
 | Git 隔离 | 每个任务使用独立分支，多 Session 顺序修改同一分支 |
 | GitHub 交付 | 分支先供人工检查，批准后才创建 PR；不会自动合并 |
@@ -57,7 +59,7 @@ flowchart TD
 控制面是 Vinext/React 应用，运行在 Cloudflare Workers 兼容环境中：
 
 - D1 保存仓库、Worker、任务、Agent Session、消息和事件。
-- 浏览器写操作要求 ChatGPT 身份。
+- 浏览器写操作要求 GitHub OAuth 登录。
 - Worker API 使用独立 Bearer Token。
 - GitHub 凭据和 Agent 登录信息始终留在本地 Worker。
 
@@ -108,7 +110,7 @@ Herdr 由本机用户启动，Agent 会继承 Herdr Server 的本地环境。生
 
 ## 当前限制
 
-- 多 Agent 当前采用顺序执行，尚未开放同一分支上的并发编辑。
+- 多 Agent 支持顺序或并行执行；并行模式为每个 Session 创建独立 worktree，完成后合并到审查分支。
 - Workflow 是显式 Session Pipeline，不包含自动规划任意 DAG。
 - 私有 Sites 入口可能在请求到达 Worker API 前拦截本地进程；真实远程 Worker 需要公开入口加应用层认证，或等价的可信网络通道。
 - 自动合并、组织级权限、预算策略和跨仓库事务尚未实现。
@@ -119,7 +121,9 @@ Herdr 由本机用户启动，Agent 会继承 Herdr Server 的本地环境。生
 app/                         控制台与 API Routes
 db/                          D1 / Drizzle 数据模型
 drizzle/                     数据库迁移
-lib/control-plane.ts         鉴权、ID 与数据库辅助函数
+lib/actors.ts               受支持 Agent 注册表
+lib/auth.ts                 GitHub OAuth 与会话
+lib/control-plane.ts        鉴权、ID 与数据库辅助函数
 public/agentmux-worker.mjs   本地 Agent Worker
 tests/                       构建和协议测试
 worker/                      Cloudflare Worker 入口

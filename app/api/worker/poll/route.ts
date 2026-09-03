@@ -1,3 +1,4 @@
+import { SUPPORTED_ACTORS } from "@/lib/actors";
 import { cleanString, database, jsonBody, now, parseJson, requireWorker } from "@/lib/control-plane";
 
 export const dynamic = "force-dynamic";
@@ -38,13 +39,13 @@ export async function POST(request: Request) {
   if ("error" in auth) return auth.error;
   const body = await jsonBody<PollInput>(request);
   const timestamp = now();
-  const capabilities = Array.isArray(body.capabilities) ? body.capabilities.filter((item) => ["pi", "codex", "claude"].includes(item)).slice(0, 3) : [];
+  const capabilities = Array.isArray(body.capabilities) ? body.capabilities.filter((item) => SUPPORTED_ACTORS.includes(item as typeof SUPPORTED_ACTORS[number])) : [];
   const runtimes = Array.isArray(body.runtimes) ? body.runtimes.filter((item) => ["herdr", "direct"].includes(item)).slice(0, 2) : ["direct"];
   await database().prepare("UPDATE workers SET platform = ?, capabilities = ?, runtimes = ?, last_seen_at = ? WHERE id = ?")
     .bind(cleanString(body.platform, 120) || "unknown", JSON.stringify(capabilities), JSON.stringify(runtimes), timestamp, auth.worker.id).run();
 
   const recoverable = await database().prepare(
-    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.runtime,
+    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.execution_strategy AS executionStrategy, t.runtime,
       t.active_session_id AS activeSessionId, t.base_branch AS baseBranch,
       t.work_branch AS workBranch, t.status, t.attempt, r.full_name AS repository,
       r.url AS repositoryUrl
@@ -66,7 +67,7 @@ export async function POST(request: Request) {
   }
 
   const candidates = await database().prepare(
-    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.runtime,
+    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.execution_strategy AS executionStrategy, t.runtime,
       t.active_session_id AS activeSessionId, t.base_branch AS baseBranch,
       t.work_branch AS workBranch, t.status, t.attempt, r.full_name AS repository,
       r.url AS repositoryUrl

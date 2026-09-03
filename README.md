@@ -93,14 +93,13 @@ npm test
 
 ## 安全边界
 
-- Agent 不接收 TeamWeave Worker Token。
-- 直接 CLI 模式会移除传入 Agent 进程的 GitHub Token 环境变量。
-- 每个任务使用独立工作分支。
-- Agent 无权自动创建 PR、合并或修改 Git remote。
-- PR 只在控制台明确批准后创建。
+- Agent 不接收 TeamWeave Worker Token 或 `AGENTMUX_GITHUB_TOKEN`。
+- Direct CLI 默认沙箱：干净 `HOME`、禁用 credential helper、拦截 `git push` / `gh`。
+- 可选 Docker 沙箱（`AGENTMUX_SANDBOX=docker`），只挂载任务工作目录。
+- GitHub 远程操作只由 Worker delivery 路径执行；推荐 scoped `AGENTMUX_GITHUB_TOKEN`。
+- 每个任务使用独立工作分支；PR 只在控制台明确批准后创建。
+- Herdr 默认关闭；若启用（`AGENTMUX_ALLOW_HERDR=1`），隔离弱于 Direct，须从最小权限环境启动 Herdr。
 - 控制面只保存仓库地址，不保存本地 GitHub 登录凭据。
-
-Herdr 由本机用户启动，Agent 会继承 Herdr Server 的本地环境。生产使用时，应从不含多余敏感环境变量的终端启动 Herdr。
 
 ## 文档
 

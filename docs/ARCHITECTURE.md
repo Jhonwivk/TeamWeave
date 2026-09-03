@@ -151,14 +151,17 @@ Agent 不能自动创建 PR 或合并。发布操作由 Worker 的独立 `publis
 - Worker 注册时只返回一次原始 Token，服务端仅保存 Hash。
 - Worker 只能读取和更新已分配给同一 owner/worker 的任务。
 - Session 更新和消息两端都验证必须属于当前 Task。
-- Worker Token 不传给 Agent 子进程。
-- 直接 CLI 模式会清理常见 GitHub Token 环境变量；Git 操作使用本机既有 `gh` / Git 凭据。
-- Herdr Agent 会继承 Herdr Server 的本机环境，因此应从最小权限环境启动 Herdr。
+- Worker Token 与 `AGENTMUX_GITHUB_TOKEN` 不传给 Agent 子进程。
+- Direct CLI 默认在沙箱中运行：独立 `HOME`、禁用 credential helper、`PATH` 前置拦截 `git push` / `gh` 的包装命令。
+- 可选 `AGENTMUX_SANDBOX=docker`，将 Agent 放入容器，仅挂载任务工作目录与包装命令。
+- GitHub 远程交付（clone/fetch/push/`gh pr create`）只走 Worker 的 delivery 路径；推荐设置只写目标仓库的 `AGENTMUX_GITHUB_TOKEN`。
+- Herdr 默认关闭（需 `AGENTMUX_ALLOW_HERDR=1`），因为它会继承 Herdr Server 的本机环境；即便开启也会尽量注入包装命令与干净 HOME，但隔离弱于 Direct 沙箱。
 
 ## 后续扩展点
 
+- 任务租约、重试次数与死信队列；
 - 基于独立 worktree 和显式合并节点的并行 DAG；
-- 消息租约、重试次数与死信队列；
 - 组织级 RBAC、预算与 Runtime 策略；
 - 仓库 Webhook 和 PR 状态回流；
 - 跨仓库任务与可验证的产物清单。
+- 网络层 egress 策略（仅允许模型 API，拒绝 api.github.com）。

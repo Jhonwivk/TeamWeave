@@ -19,7 +19,11 @@ test("ships GitHub auth, parallel execution, and expanded actor registry", async
   assert.match(consoleSource, /Parallel/);
   assert.match(workerSource, /runWorkflowParallel/);
   assert.match(workerSource, /prepareSessionWorktree/);
-  assert.match(workerSource, /ACTOR_DETECT/);
+  assert.match(workerSource, /runActorProcess/);
+  assert.match(workerSource, /teamweave-sandbox: blocked git/);
+  assert.match(workerSource, /AGENTMUX_GITHUB_TOKEN/);
+  assert.match(workerSource, /AGENTMUX_ALLOW_HERDR/);
+  assert.match(workerSource, /scrubActorEnv/);
   assert.match(schemaSource, /executionStrategy/);
   assert.match(pollSource, /executionStrategy/);
   assert.match(authSource, /exchangeGitHubCode/);

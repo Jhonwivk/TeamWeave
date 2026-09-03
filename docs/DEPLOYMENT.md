@@ -109,10 +109,12 @@ Herdr Server 会成为 Agent 进程的父环境。请从最小权限的终端启
 curl -fsSLo agentmux-worker.mjs https://YOUR_CONTROL_PLANE/agentmux-worker.mjs
 AGENTMUX_URL=https://YOUR_CONTROL_PLANE \
 AGENTMUX_TOKEN=amx_REDACTED \
+AGENTMUX_GITHUB_TOKEN=ghp_REPO_SCOPED_TOKEN \
+AGENTMUX_SANDBOX=local \
 node agentmux-worker.mjs
 ```
 
-成功启动后会输出主机平台、探测到的 Agent 和 Runtime。控制台通常在一次轮询周期内显示 Worker 在线。
+成功启动后会输出主机平台、沙箱模式、探测到的 Agent 和 Runtime。控制台通常在一次轮询周期内显示 Worker 在线。
 
 ### 环境变量
 
@@ -120,22 +122,27 @@ node agentmux-worker.mjs
 | --- | --- | --- | --- |
 | `AGENTMUX_URL` | 是 | 无 | 控制面根 URL，不含结尾斜杠也可 |
 | `AGENTMUX_TOKEN` | 是 | 无 | Worker 注册时生成的一次性展示 Token |
+| `AGENTMUX_GITHUB_TOKEN` | 强烈建议 | 无 | **仅 Worker** 用于 clone/push/`gh pr` 的 scoped token；永不注入 Agent |
+| `AGENTMUX_SANDBOX` | 否 | `local` | `local`（PATH 包装 + 干净 HOME）、`docker`（容器）、`off`（仅调试） |
+| `AGENTMUX_SANDBOX_IMAGE` | 否 | `node:22.19-bookworm` | Docker 沙箱镜像 |
+| `AGENTMUX_SANDBOX_NETWORK` | 否 | `bridge` | Docker 网络模式 |
+| `AGENTMUX_ALLOW_HERDR` | 否 | 未设置 | 设为 `1` 才允许 Herdr（隔离较弱） |
 | `AGENTMUX_WORKDIR` | 否 | `~/.agentmux/workspaces` | 仓库克隆和任务工作目录 |
 | `AGENTMUX_HERDR_TIMEOUT` | 否 | `1800000` | 等待 Herdr Agent 的毫秒数 |
 
 变量名称暂时保留 `AGENTMUX_*`，以兼容现有 Worker 和部署。
 
-生产环境建议使用系统服务和本机 Secret Store 注入变量，不要把 Token 写入仓库、Shell 历史或镜像。
+生产环境建议使用系统服务和本机 Secret Store 注入变量，不要把 Token 写入仓库、Shell 历史或镜像。优先使用**只写目标仓库**的 fine-grained GitHub token 作为 `AGENTMUX_GITHUB_TOKEN`。
 
 ## Runtime 模式
 
 | 模式 | 行为 |
 | --- | --- |
-| `auto` | Worker 有 Herdr 时优先使用；否则使用 Direct CLI |
-| `herdr` | 只允许支持 Herdr 的 Worker 领取 |
-| `direct` | 直接启动 Agent CLI，不创建持久 Herdr Session |
+| `auto` | 仅当 `AGENTMUX_ALLOW_HERDR=1` 且已安装 Herdr 时用 Herdr；否则 Direct 沙箱 CLI |
+| `herdr` | 要求 Herdr + `AGENTMUX_ALLOW_HERDR=1` |
+| `direct` | 沙箱内启动 Agent CLI，不创建持久 Herdr Session |
 
-需要跨 Session 人工恢复时应选择 `herdr`。Direct CLI 支持单/多 Agent 顺序执行，但进程结束后不能恢复原终端上下文。
+需要跨 Session 人工恢复时应选择 `herdr`（并接受较弱隔离）。Direct CLI 支持单/多 Agent 顺序执行，但进程结束后不能恢复原终端上下文。
 
 ## 仓库连接
 

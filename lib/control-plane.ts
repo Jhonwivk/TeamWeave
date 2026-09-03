@@ -62,6 +62,18 @@ export function workerId() {
   return `worker_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }
 
+export function workspaceId() {
+  return `ws_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
+export function workspaceProcessId() {
+  return `proc_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
+export function workspacePortId() {
+  return `port_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
 export function sessionId() {
   return `sess_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }

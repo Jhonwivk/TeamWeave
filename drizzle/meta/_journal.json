@@ -15,6 +15,13 @@
       "when": 1788392159306,
       "tag": "0001_sloppy_roulette",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788424758803,
+      "tag": "0002_woozy_night_thrasher",
+      "breakpoints": true
     }
   ]
 }

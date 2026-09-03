@@ -1,6 +1,6 @@
 # TeamWeave 架构
 
-本文描述 TeamWeave 当前 MVP 的运行边界、数据模型，以及单 Agent、多 Agent 和跨 Session 通信的实现。
+本文描述 TeamWeave 当前 MVP 的运行边界、Development Workspace 生命周期、单 Agent、多 Agent 和跨 Session 通信的实现。
 
 ## 系统边界
 
@@ -23,9 +23,19 @@ erDiagram
     TASK ||--|{ AGENT_SESSION : runs
     TASK ||--o{ TASK_EVENT : records
     TASK ||--o{ SESSION_MESSAGE : owns
+    REPOSITORY ||--o{ DEVELOPMENT_WORKSPACE : opens
+    WORKER ||--o{ DEVELOPMENT_WORKSPACE : prepares
+    DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_EVENT : records
+    DEVELOPMENT_WORKSPACE o|--o{ TASK : hosts
     AGENT_SESSION o|--o{ SESSION_MESSAGE : sends
     AGENT_SESSION o|--o{ SESSION_MESSAGE : receives
 ```
+
+### Development Workspace
+
+Development Workspace 是仓库级、可复用的本地开发 checkout。它保存 `repositoryId`、可选的 `workerId`、本地路径、`baseBranch`、`workingBranch`、生命周期状态和最近活跃时间。状态按 `queued → claiming → preparing → ready` 推进，也可以进入 `failed` 或由用户 `stopped`；`claiming` / `preparing` 超过恢复窗口后，原 Worker 可以重新领取。
+
+创建 Workspace 只在控制面写入元数据，不上传源码或 Git 凭据。Worker 领取后负责 clone/reuse 仓库、fetch、从基础分支创建隔离工作分支，并通过 `/api/worker/events` 回报本地路径和状态。关联 Task 会等待 Workspace `ready` 后再被 Worker 领取，从而让后续 Terminal、Agent 和 Preview 共用同一 checkout。
 
 ### Task
 

@@ -1,5 +1,4 @@
 import { env } from "cloudflare:workers";
-import { getUserFromRequest } from "@/lib/auth";
 
 type RuntimeEnv = { DB: D1Database };
 
@@ -9,13 +8,12 @@ export function database() {
   return db;
 }
 
-export async function ownerIdFrom(request: Request) {
-  const user = await getUserFromRequest(request);
-  return user?.id || null;
+export function ownerIdFrom(request: Request) {
+  return request.headers.get("oai-authenticated-user-id");
 }
 
-export async function requireOwner(request: Request) {
-  const ownerId = await ownerIdFrom(request);
+export function requireOwner(request: Request) {
+  const ownerId = ownerIdFrom(request);
   if (!ownerId) return { error: Response.json({ error: "Authentication required" }, { status: 401 }) } as const;
   return { ownerId } as const;
 }
@@ -60,6 +58,10 @@ export function repoId() {
 
 export function workerId() {
   return `worker_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
+export function workspaceId() {
+  return `ws_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }
 
 export function sessionId() {

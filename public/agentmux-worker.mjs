@@ -127,6 +127,18 @@ async function sendEvent(taskId, event) {
   }
 }
 
+async function sendWorkspaceEvent(workspaceId, event) {
+  try {
+    await api("/api/worker/events", {
+      workspaceId,
+      ...event,
+      workspace: { id: workspaceId, ...(event.workspace || {}) },
+    });
+  } catch (error) {
+    console.error("Could not send workspace event:", error instanceof Error ? error.message : String(error));
+  }
+}
+
 function parseJsonOutput(output) {
   const trimmed = output.trim();
   if (!trimmed) return null;
@@ -254,6 +266,7 @@ function promptFor(job, session, incoming) {
 }
 
 async function prepareRepository(job) {
+  if (job.workspace) return prepareWorkspace(job.workspace);
   await mkdir(ROOT, { recursive: true });
   const repositoryDir = join(ROOT, String(job.repository).replace("/", "__"));
   const gitDir = join(repositoryDir, ".git");
@@ -280,6 +293,72 @@ async function prepareRepository(job) {
   await run("git", ["config", "user.name", "TeamWeave Worker"], { cwd: repositoryDir });
   await run("git", ["config", "user.email", "teamweave-worker@users.noreply.github.com"], { cwd: repositoryDir });
   return { repositoryDir, branch };
+}
+
+function workspaceDirectory(workspace) {
+  const fallback = join(ROOT, String(workspace.id));
+  if (!workspace.localPath) return fallback;
+  const candidate = resolve(String(workspace.localPath));
+  return candidate === ROOT || candidate.startsWith(`${ROOT}/`) ? candidate : fallback;
+}
+
+async function prepareWorkspace(workspace) {
+  await mkdir(ROOT, { recursive: true });
+  const repositoryDir = workspaceDirectory(workspace);
+  const gitDir = join(repositoryDir, ".git");
+  if (!(await exists(gitDir))) {
+    if (await exists(repositoryDir)) {
+      throw new Error(`Workspace path exists but is not a Git checkout: ${repositoryDir}`);
+    }
+    console.log(`Cloning ${workspace.repository} for workspace ${workspace.id}...`);
+    const ghReady = await has("gh");
+    const result = ghReady
+      ? await run("gh", ["repo", "clone", workspace.repository, repositoryDir, "--", "--filter=blob:none"])
+      : await run("git", ["clone", "--filter=blob:none", workspace.repositoryUrl, repositoryDir]);
+    if (result.code !== 0) throw new Error(result.stderr || "Repository clone failed");
+  }
+
+  const fetched = await run("git", ["fetch", "origin", "--prune"], { cwd: repositoryDir });
+  if (fetched.code !== 0) throw new Error(fetched.stderr || "Could not fetch repository updates");
+  const branch = workspace.workingBranch || `teamweave/workspace-${String(workspace.id).replace("ws_", "").slice(0, 12)}`;
+  const current = await run("git", ["branch", "--show-current"], { cwd: repositoryDir });
+  if (current.stdout.trim() !== branch) {
+    const dirty = await run("git", ["status", "--porcelain"], { cwd: repositoryDir });
+    if (dirty.stdout.trim()) throw new Error(`Workspace has uncommitted changes on ${current.stdout.trim() || "detached HEAD"}; clean it manually before reopening.`);
+    const remoteBranch = await run("git", ["rev-parse", "--verify", `origin/${branch}`], { cwd: repositoryDir });
+    const startPoint = remoteBranch.code === 0 ? `origin/${branch}` : `origin/${workspace.baseBranch}`;
+    const checkout = await run("git", ["checkout", "-B", branch, startPoint], { cwd: repositoryDir });
+    if (checkout.code !== 0) throw new Error(checkout.stderr || "Could not create workspace branch");
+  }
+  await run("git", ["config", "user.name", "TeamWeave Worker"], { cwd: repositoryDir });
+  await run("git", ["config", "user.email", "teamweave-worker@users.noreply.github.com"], { cwd: repositoryDir });
+  return { repositoryDir, branch };
+}
+
+async function runWorkspaceJob(job) {
+  const workspace = job.workspace;
+  if (!workspace?.id) throw new Error("Workspace job did not include workspace metadata");
+  await sendWorkspaceEvent(workspace.id, {
+    kind: "workspace.preparing",
+    message: `Preparing ${workspace.repository} on a dedicated branch`,
+    workspace: { status: "preparing", error: null },
+  });
+  try {
+    const prepared = await prepareWorkspace(workspace);
+    await sendWorkspaceEvent(workspace.id, {
+      kind: "workspace.ready",
+      message: "Workspace is ready for agents and future terminal sessions",
+      workspace: { status: "ready", localPath: prepared.repositoryDir, workingBranch: prepared.branch, error: null },
+      payload: { repository: workspace.repository, baseBranch: workspace.baseBranch, workingBranch: prepared.branch },
+    });
+  } catch (error) {
+    await sendWorkspaceEvent(workspace.id, {
+      kind: "workspace.failed",
+      message: "Worker could not prepare the workspace",
+      workspace: { status: "failed", error: error instanceof Error ? error.message : String(error) },
+    });
+    throw error;
+  }
 }
 
 function streamReporter(taskId, sessionId) {
@@ -673,19 +752,28 @@ while (true) {
       continue;
     }
     const job = response.job;
-    console.log(`[${job.id}] ${job.operation}: ${job.title} · ${job.sessions.length} session(s)`);
+    console.log(`[${job.id}] ${job.operation}: ${job.title || job.workspace?.repository || "workspace"}${job.sessions ? ` · ${job.sessions.length} session(s)` : ""}`);
     try {
-      if (job.operation === "publish") await publish(job);
+      if (job.operation === "workspace") await runWorkspaceJob(job);
+      else if (job.operation === "publish") await publish(job);
       else await runWorkflow(job);
     } catch (error) {
       console.error(error);
-      await sendEvent(job.id, {
-        status: "failed",
-        activeSessionId: null,
-        kind: "worker.failed",
-        message: "Worker could not complete the job",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (job.operation === "workspace" && job.workspace?.id) {
+        await sendWorkspaceEvent(job.workspace.id, {
+          kind: "workspace.failed",
+          message: "Worker could not complete the workspace job",
+          workspace: { status: "failed", error: error instanceof Error ? error.message : String(error) },
+        });
+      } else {
+        await sendEvent(job.id, {
+          status: "failed",
+          activeSessionId: null,
+          kind: "worker.failed",
+          message: "Worker could not complete the job",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   } catch (error) {
     console.error("Poll failed:", error instanceof Error ? error.message : String(error));

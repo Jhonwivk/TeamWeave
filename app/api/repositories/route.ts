@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 type RepositoryInput = { fullName?: string; defaultBranch?: string; visibility?: string };
 
 export async function POST(request: Request) {
-  const auth = await requireOwner(request);
+  const auth = requireOwner(request);
   if ("error" in auth) return auth.error;
   const payload = await jsonBody<RepositoryInput>(request);
   const fullName = cleanString(payload.fullName, 200).replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
@@ -39,11 +39,13 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const auth = await requireOwner(request);
+  const auth = requireOwner(request);
   if ("error" in auth) return auth.error;
   const id = new URL(request.url).searchParams.get("id") || "";
   const active = await database().prepare("SELECT COUNT(*) AS count FROM tasks WHERE owner_id = ? AND repository_id = ? AND status NOT IN ('done','failed','cancelled')").bind(auth.ownerId, id).first<{ count: number }>();
   if ((active?.count || 0) > 0) return Response.json({ error: "Finish or cancel active tasks first" }, { status: 409 });
+  const workspaceCount = await database().prepare("SELECT COUNT(*) AS count FROM development_workspaces WHERE owner_id = ? AND repository_id = ?").bind(auth.ownerId, id).first<{ count: number }>();
+  if ((workspaceCount?.count || 0) > 0) return Response.json({ error: "Delete connected workspaces first" }, { status: 409 });
   await database().prepare("DELETE FROM repositories WHERE id = ? AND owner_id = ?").bind(id, auth.ownerId).run();
   return Response.json({ ok: true });
 }

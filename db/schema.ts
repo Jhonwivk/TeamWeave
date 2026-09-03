@@ -28,6 +28,36 @@ export const workers = sqliteTable("workers", {
   index("idx_workers_owner_last_seen").on(table.ownerId, table.lastSeenAt),
 ]);
 
+export const developmentWorkspaces = sqliteTable("development_workspaces", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  repositoryId: text("repository_id").notNull().references(() => repositories.id),
+  workerId: text("worker_id").references(() => workers.id),
+  localPath: text("local_path"),
+  baseBranch: text("base_branch").notNull().default("main"),
+  workingBranch: text("working_branch"),
+  status: text("status").notNull().default("queued"),
+  error: text("error"),
+  createdAt: integer("created_at").notNull(),
+  lastActiveAt: integer("last_active_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("idx_development_workspaces_owner_status_updated").on(table.ownerId, table.status, table.updatedAt),
+  index("idx_development_workspaces_worker_status").on(table.workerId, table.status),
+  index("idx_development_workspaces_repository_status").on(table.repositoryId, table.status),
+]);
+
+export const workspaceEvents = sqliteTable("workspace_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  kind: text("kind").notNull(),
+  message: text("message").notNull(),
+  payload: text("payload"),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_workspace_events_workspace_created").on(table.workspaceId, table.createdAt),
+]);
+
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull(),
@@ -36,8 +66,8 @@ export const tasks = sqliteTable("tasks", {
   prompt: text("prompt").notNull(),
   actor: text("actor").notNull(),
   model: text("model"),
+  workspaceId: text("workspace_id").references(() => developmentWorkspaces.id),
   mode: text("mode").notNull().default("single"),
-  executionStrategy: text("execution_strategy").notNull().default("sequential"),
   runtime: text("runtime").notNull().default("auto"),
   activeSessionId: text("active_session_id"),
   baseBranch: text("base_branch").notNull().default("main"),

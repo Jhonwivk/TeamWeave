@@ -23,8 +23,17 @@ type SessionMessageInput = {
   status?: string;
 };
 
+type WorkspaceUpdate = {
+  id?: string;
+  status?: string;
+  localPath?: string;
+  workingBranch?: string;
+  error?: string;
+};
+
 type EventInput = {
   taskId?: string;
+  workspaceId?: string;
   kind?: string;
   message?: string;
   status?: string;
@@ -37,6 +46,7 @@ type EventInput = {
   payload?: unknown;
   session?: SessionUpdate;
   sessionMessage?: SessionMessageInput;
+  workspace?: WorkspaceUpdate;
 };
 
 async function sessionBelongsToTask(sessionId: string | null, taskId: string) {
@@ -49,8 +59,16 @@ export async function POST(request: Request) {
   if ("error" in auth) return auth.error;
   const input = await jsonBody<EventInput>(request);
   const taskId = cleanString(input.taskId, 100);
-  const task = await database().prepare("SELECT id FROM tasks WHERE id = ? AND owner_id = ? AND worker_id = ?").bind(taskId, auth.worker.ownerId, auth.worker.id).first();
-  if (!task) return Response.json({ error: "Assigned task not found" }, { status: 404 });
+  const workspaceId = cleanString(input.workspaceId || input.workspace?.id, 100);
+  if ((taskId && workspaceId) || (!taskId && !workspaceId)) return Response.json({ error: "Task or workspace is required" }, { status: 400 });
+  const task = taskId
+    ? await database().prepare("SELECT id, workspace_id AS workspaceId FROM tasks WHERE id = ? AND owner_id = ? AND worker_id = ?").bind(taskId, auth.worker.ownerId, auth.worker.id).first<{ id: string; workspaceId: string | null }>()
+    : null;
+  const workspace = workspaceId
+    ? await database().prepare("SELECT id FROM development_workspaces WHERE id = ? AND owner_id = ? AND worker_id = ?").bind(workspaceId, auth.worker.ownerId, auth.worker.id).first<{ id: string }>()
+    : null;
+  if (taskId && !task) return Response.json({ error: "Assigned task not found" }, { status: 404 });
+  if (workspaceId && !workspace) return Response.json({ error: "Assigned workspace not found" }, { status: 404 });
 
   const timestamp = now();
   const allowedStatuses = ["running", "blocked", "review", "done", "failed"];
@@ -58,12 +76,37 @@ export async function POST(request: Request) {
   const kind = cleanString(input.kind, 80) || "worker.log";
   const statements = [
     database().prepare("UPDATE workers SET last_seen_at = ? WHERE id = ?").bind(timestamp, auth.worker.id),
-    database().prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").bind(timestamp, taskId),
   ];
 
+  if (taskId) {
+    statements.push(database().prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").bind(timestamp, taskId));
+    if (task?.workspaceId) {
+      statements.push(database().prepare("UPDATE development_workspaces SET last_active_at = ?, updated_at = ? WHERE id = ? AND owner_id = ?").bind(timestamp, timestamp, task.workspaceId, auth.worker.ownerId));
+    }
+  }
+
   if (kind !== "worker.heartbeat") {
-    statements.push(database().prepare("INSERT INTO task_events (task_id, kind, message, payload, created_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(taskId, kind, cleanString(input.message, 6000) || "Worker update", input.payload == null ? null : JSON.stringify(input.payload).slice(0, 12000), timestamp));
+    if (workspaceId) {
+      statements.push(database().prepare("INSERT INTO workspace_events (workspace_id, kind, message, payload, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(workspaceId, kind, cleanString(input.message, 6000) || "Worker update", input.payload == null ? null : JSON.stringify(input.payload).slice(0, 12000), timestamp));
+    } else {
+      statements.push(database().prepare("INSERT INTO task_events (task_id, kind, message, payload, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(taskId, kind, cleanString(input.message, 6000) || "Worker update", input.payload == null ? null : JSON.stringify(input.payload).slice(0, 12000), timestamp));
+    }
+  }
+
+  if (workspaceId) {
+    const workspaceStatus = ["queued", "claiming", "preparing", "ready", "stopped", "failed"].includes(String(input.workspace?.status))
+      ? String(input.workspace?.status)
+      : null;
+    const localPath = cleanString(input.workspace?.localPath, 500) || null;
+    const workingBranch = cleanString(input.workspace?.workingBranch, 200) || null;
+    const error = cleanString(input.workspace?.error, 8000) || null;
+    statements.push(database().prepare(
+      "UPDATE development_workspaces SET status = COALESCE(?, status), local_path = COALESCE(?, local_path), working_branch = COALESCE(?, working_branch), error = ?, last_active_at = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND worker_id = ?"
+    ).bind(workspaceStatus, localPath, workingBranch, error, timestamp, timestamp, workspaceId, auth.worker.ownerId, auth.worker.id));
+    await database().batch(statements);
+    return Response.json({ ok: true });
   }
 
   if (status) {

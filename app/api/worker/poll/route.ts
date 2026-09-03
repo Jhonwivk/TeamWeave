@@ -5,6 +5,22 @@ export const dynamic = "force-dynamic";
 
 type PollInput = { platform?: string; capabilities?: string[]; runtimes?: string[] };
 type Candidate = Record<string, unknown> & { id: string; status: string; runtime: string };
+type WorkspaceCandidate = Record<string, unknown> & { id: string; status: string };
+
+async function hydrateWorkspace(candidate: WorkspaceCandidate) {
+  const workspace = await database().prepare(
+    `SELECT w.id, w.owner_id AS ownerId, w.repository_id AS repositoryId,
+      w.worker_id AS workerId, w.local_path AS localPath,
+      w.base_branch AS baseBranch, w.working_branch AS workingBranch,
+      w.status, w.error, w.created_at AS createdAt,
+      w.last_active_at AS lastActiveAt, w.updated_at AS updatedAt,
+      r.full_name AS repository, r.url AS repositoryUrl
+     FROM development_workspaces w
+     JOIN repositories r ON r.id = w.repository_id
+     WHERE w.id = ?`
+  ).bind(candidate.id).first<Record<string, unknown>>();
+  return workspace ? { ...workspace, operation: "workspace" } : null;
+}
 
 async function hydrateJob(candidate: Candidate, operation: "run" | "resume" | "publish") {
   const sessionQuery = "SELECT id, actor, role, model, ordinal, status, runtime, runtime_name AS runtimeName, workspace_id AS workspaceId, pane_id AS paneId, summary FROM agent_sessions WHERE task_id = ? ORDER BY ordinal";
@@ -19,9 +35,23 @@ async function hydrateJob(candidate: Candidate, operation: "run" | "resume" | "p
   const messages = await database().prepare(
       "SELECT id, from_session_id AS fromSessionId, to_session_id AS toSessionId, kind, body, artifacts, git_ref AS gitRef, status, created_at AS createdAt, delivered_at AS deliveredAt, acknowledged_at AS acknowledgedAt FROM session_messages WHERE task_id = ? ORDER BY created_at"
     ).bind(candidate.id).all<Record<string, unknown>>();
+  const workspace = candidate.workspaceId
+    ? await database().prepare(
+        `SELECT w.id, w.repository_id AS repositoryId, w.worker_id AS workerId,
+          w.local_path AS localPath, w.base_branch AS baseBranch,
+          w.working_branch AS workingBranch, w.status, w.error,
+          w.created_at AS createdAt, w.last_active_at AS lastActiveAt,
+          w.updated_at AS updatedAt, r.full_name AS repository,
+          r.url AS repositoryUrl
+         FROM development_workspaces w
+         JOIN repositories r ON r.id = w.repository_id
+         WHERE w.id = ?`
+      ).bind(String(candidate.workspaceId)).first<Record<string, unknown>>()
+    : null;
   return {
     ...candidate,
     operation,
+    workspace,
     sessions: sessions.results,
     messages: messages.results.map((row) => ({ ...row, artifacts: parseJson(String(row.artifacts || ""), []) })),
   };
@@ -58,14 +88,52 @@ export async function POST(request: Request) {
   await database().prepare("UPDATE workers SET platform = ?, capabilities = ?, runtimes = ?, last_seen_at = ? WHERE id = ?")
     .bind(cleanString(body.platform, 120) || "unknown", JSON.stringify(capabilities), JSON.stringify(runtimes), timestamp, auth.worker.id).run();
 
+  const recoverableWorkspace = await database().prepare(
+    `SELECT id, status FROM development_workspaces
+     WHERE owner_id = ? AND worker_id = ?
+       AND status IN ('claiming', 'preparing')
+       AND updated_at < ?
+     ORDER BY updated_at ASC LIMIT 1`
+  ).bind(auth.worker.ownerId, auth.worker.id, timestamp - 60000).first<WorkspaceCandidate>();
+  if (recoverableWorkspace) {
+    const hydrated = await hydrateWorkspace(recoverableWorkspace);
+    if (hydrated) {
+      await database().batch([
+        database().prepare("UPDATE development_workspaces SET updated_at = ?, last_active_at = ? WHERE id = ? AND worker_id = ?").bind(timestamp, timestamp, recoverableWorkspace.id, auth.worker.id),
+        database().prepare("INSERT INTO workspace_events (workspace_id, kind, message, created_at) VALUES (?, 'worker.recovered', 'Worker recovered an interrupted workspace', ?)").bind(recoverableWorkspace.id, timestamp),
+      ]);
+      return Response.json({ job: { id: recoverableWorkspace.id, operation: "workspace", workspace: { ...hydrated, status: recoverableWorkspace.status } } });
+    }
+  }
+
+  const workspaceCandidates = await database().prepare(
+    `SELECT w.id, w.status
+     FROM development_workspaces w
+     WHERE w.owner_id = ? AND w.status = 'queued'
+       AND (w.worker_id IS NULL OR w.worker_id = ?)
+     ORDER BY w.created_at ASC LIMIT 10`
+  ).bind(auth.worker.ownerId, auth.worker.id).all<WorkspaceCandidate>();
+  for (const candidate of workspaceCandidates.results) {
+    const claimed = await database().prepare(
+      "UPDATE development_workspaces SET status = 'claiming', worker_id = ?, updated_at = ?, last_active_at = ?, error = NULL WHERE id = ? AND status = 'queued' AND (worker_id IS NULL OR worker_id = ?)"
+    ).bind(auth.worker.id, timestamp, timestamp, candidate.id, auth.worker.id).run();
+    if (!claimed.meta.changes) continue;
+    const hydrated = await hydrateWorkspace({ ...candidate, status: "claiming" });
+    if (!hydrated) continue;
+    await database().prepare("INSERT INTO workspace_events (workspace_id, kind, message, payload, created_at) VALUES (?, 'worker.claimed', ?, ?, ?)")
+      .bind(candidate.id, `${auth.worker.name} claimed the workspace`, JSON.stringify({ workerId: auth.worker.id }), timestamp).run();
+    return Response.json({ job: { id: candidate.id, operation: "workspace", workspace: { ...hydrated, status: "claiming", workerId: auth.worker.id } } });
+  }
+
   const recoverable = await database().prepare(
-    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.runtime,
+    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.workspace_id AS workspaceId, t.mode AS executionMode, t.runtime,
       t.active_session_id AS activeSessionId, t.base_branch AS baseBranch,
       t.work_branch AS workBranch, t.status, t.attempt, r.full_name AS repository,
       r.url AS repositoryUrl
      FROM tasks t JOIN repositories r ON r.id = t.repository_id
      WHERE t.owner_id = ? AND t.worker_id = ?
        AND t.status IN ('claimed', 'running', 'publishing', 'resuming')
+       AND (t.workspace_id IS NULL OR EXISTS (SELECT 1 FROM development_workspaces w WHERE w.id = t.workspace_id AND w.status = 'ready' AND w.worker_id = t.worker_id))
        AND t.updated_at < ?
      ORDER BY t.updated_at ASC LIMIT 1`
   ).bind(auth.worker.ownerId, auth.worker.id, timestamp - 60000).first<Candidate>();
@@ -81,16 +149,17 @@ export async function POST(request: Request) {
   }
 
   const candidates = await database().prepare(
-    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.runtime,
+    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.workspace_id AS workspaceId, t.mode AS executionMode, t.runtime,
       t.active_session_id AS activeSessionId, t.base_branch AS baseBranch,
       t.work_branch AS workBranch, t.status, t.attempt, r.full_name AS repository,
       r.url AS repositoryUrl
      FROM tasks t JOIN repositories r ON r.id = t.repository_id
      WHERE t.owner_id = ? AND t.status IN ('queued', 'publish_requested', 'resume_requested')
        AND (t.status != 'resume_requested' OR t.worker_id = ?)
+       AND (t.workspace_id IS NULL OR EXISTS (SELECT 1 FROM development_workspaces w WHERE w.id = t.workspace_id AND w.status = 'ready' AND w.worker_id = COALESCE(t.worker_id, ?)))
      ORDER BY CASE t.status WHEN 'resume_requested' THEN 0 WHEN 'publish_requested' THEN 1 ELSE 2 END,
        t.created_at ASC LIMIT 25`
-  ).bind(auth.worker.ownerId, auth.worker.id).all<Candidate>();
+  ).bind(auth.worker.ownerId, auth.worker.id, auth.worker.id).all<Candidate>();
 
   for (const candidate of candidates.results) {
     const hydrated = await hydrateJob(candidate, candidate.status === "publish_requested" ? "publish" : candidate.status === "resume_requested" ? "resume" : "run");

@@ -110,6 +110,17 @@ node agentmux-worker.mjs
 
 变量名称暂时保留 `AGENTMUX_*`，以兼容现有 Worker 和部署。
 
+### Development Workspace 生命周期
+
+在控制台的 **Repositories → Open workspace** 创建工作区后，Worker 会优先领取 Workspace 作业，再执行以下步骤：
+
+1. 在 `AGENTMUX_WORKDIR` 下按 Workspace ID 选择或创建本地 checkout；
+2. 使用 `gh repo clone`（可用时）或 `git clone`，随后 `git fetch origin --prune`；
+3. 从 `baseBranch` 创建或复用 `workingBranch`，并写入 TeamWeave 的 Git 提交身份；
+4. 通过 `/api/worker/events` 报告 `claiming`、`preparing`、`ready` 或 `failed`，包括本地路径和工作分支。
+
+控制面只把 Workspace 元数据写入 D1，不上传源码和 Git 凭据。Worker 在 `claiming` / `preparing` 阶段断线超过一分钟后，原 Worker 下一次轮询会重新领取并继续准备；`stopped` / `failed` 工作区可由控制台 **Queue again**。
+
 生产环境建议使用系统服务和本机 Secret Store 注入变量，不要把 Token 写入仓库、Shell 历史或镜像。
 
 ## Runtime 模式
@@ -129,6 +140,7 @@ node agentmux-worker.mjs
 - 公开仓库会尝试从 GitHub 公共 API补全元数据；
 - 私有仓库可能显示 `unknown`，最终访问权由本地 `gh` 登录验证；
 - 每个 Task 从所选 `baseBranch` 创建 `teamweave/<task-id>` 分支；
+- 关联 Development Workspace 的 Task 会等待 Workspace `ready`，然后复用其本地 checkout 和 working branch；
 - 执行完成会推送隔离分支，但必须人工批准才创建 PR。
 
 ## 本地开发
@@ -165,6 +177,7 @@ npm run db:generate
 - `herdr` 任务要求 Worker 探测到 Herdr；
 - 恢复任务只能由原 Worker 领取；
 - 检查任务是否处于 `queued`、`publish_requested` 或 `resume_requested`。
+- 如果任务绑定了 Workspace，先确认 Workspace 状态为 `ready`，且仍归属于当前 Worker。
 
 ### 克隆或推送失败
 
@@ -175,6 +188,8 @@ git ls-remote https://github.com/OWNER/REPOSITORY.git HEAD
 ```
 
 私有仓库还需确认当前 GitHub 账号对目标仓库有写权限。
+
+Workspace 失败时，先查看 **Workspaces** 页面显示的 `error`、`baseBranch` 和 `workingBranch`；修复本机 GitHub 登录或清理本地 checkout 后点击 **Queue again**。Worker 会复用同一 Workspace ID，但会在不可信的旧路径之外选择当前机器的 `AGENTMUX_WORKDIR` 作为安全回退路径。
 
 ### Herdr 超时或无法恢复
 

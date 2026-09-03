@@ -35,6 +35,8 @@ Content-Type: application/json
   "events": [],
   "sessions": [],
   "messages": [],
+  "workspaces": [],
+  "workspaceEvents": [],
   "serverTime": 1788316800000
 }
 ```
@@ -89,6 +91,7 @@ Content-Type: application/json
 ```json
 {
   "repositoryId": "repo_...",
+  "workspaceId": "ws_...",
   "title": "修复登录回调",
   "prompt": "定位失败原因、实现修复并运行测试。",
   "mode": "single",
@@ -98,6 +101,8 @@ Content-Type: application/json
   "baseBranch": "main"
 }
 ```
+
+`workspaceId` 可选。传入后，Task 会等待该 Development Workspace 达到 `ready`，再在其本地 checkout 和 working branch 上执行；不传则保持任务级临时 checkout 行为。
 
 多 Agent：
 
@@ -190,6 +195,27 @@ Action 与当前状态不匹配时返回 `409`。
 
 `token` 是唯一一次返回的原始凭据。
 
+### GET /api/workspaces
+
+返回当前 owner 的仓库级 Development Workspace，字段包括 `repositoryId`、`workerId`、`localPath`、`baseBranch`、`workingBranch`、`status`、`error`、`lastActiveAt` 和时间戳。
+
+### POST /api/workspaces
+
+创建或复用一个仓库工作区：
+
+```json
+{
+  "repositoryId": "repo_...",
+  "baseBranch": "main"
+}
+```
+
+新工作区状态为 `queued`，Worker 领取后依次回报 `claiming`、`preparing`、`ready`；如果 clone、fetch 或分支初始化失败则为 `failed`。同一仓库已有活动工作区时返回该工作区，不重复创建。
+
+### POST /api/workspaces/:id/action
+
+支持 `stop`（停止排队或就绪工作区）、`reopen`（将 `stopped` / `failed` 工作区重新排队）和 `delete`（仅删除没有关联 Task 的 `stopped` / `failed` 工作区）。
+
 ## Worker 接口
 
 ### POST /api/worker/poll
@@ -228,6 +254,7 @@ Action 与当前状态不匹配时返回 `409`。
 - `run`：开始或恢复任务执行；
 - `resume`：向原活动 Session 投递人工回复并继续；
 - `publish`：推送分支并创建 PR。
+- `workspace`：准备或恢复一个 Development Workspace；返回值包含 `workspace` 元数据，不包含 Agent Session。
 
 没有匹配作业时返回：
 
@@ -280,6 +307,8 @@ Action 与当前状态不匹配时返回 `409`。
 ```
 
 每个请求只允许更新 Token 对应 Worker 已领取的 Task。Session ID 和消息两端 ID 都会验证必须属于该 Task。
+
+Worker 也可以用同一接口上报 Workspace 生命周期：将 `workspaceId` 和 `workspace`（`id`、`status`、`localPath`、`workingBranch`、`error`）放入请求。此类事件写入 `workspace_events`，并只允许更新当前 Worker 领取的 Workspace。
 
 允许的 Task 状态更新：
 

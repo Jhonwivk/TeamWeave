@@ -11,7 +11,7 @@
 | D1 | 保存控制面状态与可恢复的通信记录 | 不保存代码仓库和 Agent 登录态 |
 | Local Worker | 领取任务、准备 Git 分支、驱动 Runtime、上报状态 | 不替控制面做用户授权决策 |
 | Herdr Runtime | 管理持久终端、Pane 和 Agent 进程 | 不定义任务语义和权限策略 |
-| Agent CLI | Pi、Codex 或 Claude Code 执行真实代码工作 | 不持有 TeamWeave Worker Token |
+| Agent CLI | 通过 Actor Registry 接入主流 Coding Agent，执行真实代码工作 | 不持有 TeamWeave Worker Token |
 | GitHub | 保存分支和 Pull Request | 不承担 Session 间消息传递 |
 
 ## 核心数据模型
@@ -35,7 +35,7 @@ erDiagram
 
 一个明确的 Agent 执行阶段，包含：
 
-- `actor`：`pi`、`codex` 或 `claude`；
+- `actor`：Actor Registry 中的 Agent 标识，例如 `pi`、`codex`、`claude`、`gemini`、`cursor`、`copilot`、`opencode`、`qwen` 或 `aider`；
 - `role`：该阶段的职责；
 - `ordinal`：顺序执行位置；
 - `runtime`、`workspaceId`、`paneId`：恢复真实 Herdr Session 所需的定位信息；
@@ -82,22 +82,15 @@ Worker 会在独立工作分支运行 Agent。Agent 完成后，任务进入 `re
 5. 下一 Session 在同一分支上启动，并收到原始目标、自己的角色和已有 handoff。
 6. 最后一个 Session 完成后，Worker 汇总 diff，任务进入人工 Review。
 
-顺序执行是刻意的安全选择：多个 Agent 并发修改同一工作树会引入非确定性冲突。TeamWeave 现在支持 `parallel` 执行策略：每个 Session 使用独立 git worktree，完成后按 ordinal 合并到审查分支。Herdr 仍主要用于顺序工作流；并行模式使用 Direct CLI。
+顺序执行是刻意的安全选择：多个 Agent 并发修改同一工作树会引入非确定性冲突，而独立 worktree 又需要额外的合并协调。当前协议先保证交接可审计和任务可恢复，再扩展并行 DAG。
 
-## 并行 Agent 执行
+### Actor Registry 与 Runtime 选择
 
-```mermaid
-flowchart LR
-    Base[baseBranch] --> W1[worktree sess-0]
-    Base --> W2[worktree sess-1]
-    Base --> W3[worktree sess-2]
-    W1 --> Merge[integration branch]
-    W2 --> Merge
-    W3 --> Merge
-    Merge --> Review[Human review]
-```
+控制面使用统一的 Actor Registry 描述 Agent 名称、可用 Runtime 和 UI 元数据。Worker 下载的是独立的 JavaScript 文件，因此也内置一份可执行文件注册表：先用 `--version` 探测本机命令，再把已安装 actor 上报给 `/api/worker/poll`。
 
-并行模式下不使用 handoff 链；每个 Session 从相同任务 prompt 和 base branch 启动，Worker 在所有 Session 完成后合并分支并推送。
+- `herdr`：通过 `herdr agent start --kind <actor>` 创建持久 Session；适用于 Herdr 支持的终端 Agent。
+- `direct`：调用 Agent 的非交互 CLI 适配器；当前覆盖 Pi、Codex、Claude Code、Gemini CLI、Cursor Agent、GitHub Copilot、OpenCode、Qwen Code 和 Aider。
+- `auto`：逐 Session 选择 Runtime。这样 Aider 这类 Direct-only actor 可以和 Herdr actor 出现在同一个顺序 Workflow 中；控制面不会把不兼容任务交给 Worker。
 
 ## Herdr 集成
 
@@ -105,7 +98,7 @@ Worker 优先使用 Herdr 管理持久 Agent 进程，使用的能力包括：
 
 - `workspace create`：为任务创建持久工作区；
 - `pane split`：为多 Agent 阶段准备隔离 Pane；
-- `agent start`：启动 Pi、Codex 或 Claude Code；
+- `agent start`：按 `actor` kind 启动对应的 Herdr Agent（包括 Pi、Codex、Claude Code、Gemini、Cursor、Copilot、OpenCode、Qwen，以及 Herdr 支持的其他终端 Agent）；
 - `agent prompt`：投递阶段 Prompt 或后续人工回复；
 - `agent wait`：等待 Agent 到达完成或阻塞状态；
 - `agent read`：读取结构化结果；
@@ -147,21 +140,18 @@ Agent 不能自动创建 PR 或合并。发布操作由 Worker 的独立 `publis
 
 ## 信任边界
 
-- 浏览器 API 使用 GitHub OAuth 会话确定 owner。
+- 浏览器 API 使用 ChatGPT 身份确定 owner。
 - Worker 注册时只返回一次原始 Token，服务端仅保存 Hash。
 - Worker 只能读取和更新已分配给同一 owner/worker 的任务。
 - Session 更新和消息两端都验证必须属于当前 Task。
-- Worker Token 与 `AGENTMUX_GITHUB_TOKEN` 不传给 Agent 子进程。
-- Direct CLI 默认在沙箱中运行：独立 `HOME`、禁用 credential helper、`PATH` 前置拦截 `git push` / `gh` 的包装命令。
-- 可选 `AGENTMUX_SANDBOX=docker`，将 Agent 放入容器，仅挂载任务工作目录与包装命令。
-- GitHub 远程交付（clone/fetch/push/`gh pr create`）只走 Worker 的 delivery 路径；推荐设置只写目标仓库的 `AGENTMUX_GITHUB_TOKEN`。
-- Herdr 默认关闭（需 `AGENTMUX_ALLOW_HERDR=1`），因为它会继承 Herdr Server 的本机环境；即便开启也会尽量注入包装命令与干净 HOME，但隔离弱于 Direct 沙箱。
+- Worker Token 不传给 Agent 子进程。
+- 直接 CLI 模式会清理常见 GitHub Token 环境变量；Git 操作使用本机既有 `gh` / Git 凭据。
+- Herdr Agent 会继承 Herdr Server 的本机环境，因此应从最小权限环境启动 Herdr。
 
 ## 后续扩展点
 
-- 任务租约、重试次数与死信队列；
 - 基于独立 worktree 和显式合并节点的并行 DAG；
+- 消息租约、重试次数与死信队列；
 - 组织级 RBAC、预算与 Runtime 策略；
 - 仓库 Webhook 和 PR 状态回流；
 - 跨仓库任务与可验证的产物清单。
-- 网络层 egress 策略（仅允许模型 API，拒绝 api.github.com）。

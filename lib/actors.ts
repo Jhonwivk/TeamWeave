@@ -1,135 +1,153 @@
-export const ACTOR_IDS = [
-  "pi",
-  "codex",
-  "claude",
-  "cursor",
-  "aider",
-  "gemini",
-  "opencode",
-  "goose",
-  "amazon_q",
-  "windsurf",
-  "copilot",
-  "deepseek",
-] as const;
-
-export type ActorId = (typeof ACTOR_IDS)[number];
-
-export type ActorDefinition = {
-  id: ActorId;
-  name: string;
-  detail: string;
-  cli: string;
-  herdrKind: string;
-  tone: "violet" | "cyan" | "amber" | "emerald" | "rose" | "sky";
-};
-
-export const ACTOR_REGISTRY: Record<ActorId, ActorDefinition> = {
-  pi: {
+/**
+ * Product-level registry for coding Agent actors.
+ *
+ * The worker keeps a small executable registry as well because the worker is
+ * downloaded as a standalone .mjs file. Keep the ids and runtime matrix in
+ * sync with public/agentmux-worker.mjs.
+ */
+export const ACTOR_CATALOG = [
+  {
     id: "pi",
     name: "Pi",
+    runtimes: ["herdr", "direct"],
     detail: "Minimal coding harness · JSON mode",
-    cli: "pi",
-    herdrKind: "pi",
-    tone: "violet",
+    modelHint: "provider/model",
+    tier: "core",
   },
-  codex: {
+  {
     id: "codex",
     name: "Codex",
-    detail: "Workspace-write sandbox · JSONL",
-    cli: "codex",
-    herdrKind: "codex",
-    tone: "cyan",
+    runtimes: ["herdr", "direct"],
+    detail: "OpenAI coding agent · workspace sandbox",
+    modelHint: "Use CLI default",
+    tier: "core",
   },
-  claude: {
+  {
     id: "claude",
     name: "Claude Code",
-    detail: "Headless stream · accept edits",
-    cli: "claude",
-    herdrKind: "claude",
-    tone: "amber",
+    runtimes: ["herdr", "direct"],
+    detail: "Anthropic coding agent · headless edits",
+    modelHint: "sonnet",
+    tier: "core",
   },
-  cursor: {
-    id: "cursor",
-    name: "Cursor Agent",
-    detail: "Cursor CLI agent mode",
-    cli: "cursor",
-    herdrKind: "cursor",
-    tone: "violet",
-  },
-  aider: {
-    id: "aider",
-    name: "Aider",
-    detail: "Pair-programming CLI · auto-commit",
-    cli: "aider",
-    herdrKind: "aider",
-    tone: "emerald",
-  },
-  gemini: {
+  {
     id: "gemini",
     name: "Gemini CLI",
-    detail: "Google Gemini command-line agent",
-    cli: "gemini",
-    herdrKind: "gemini",
-    tone: "sky",
+    runtimes: ["herdr", "direct"],
+    detail: "Google coding agent · headless JSON",
+    modelHint: "gemini model",
+    tier: "common",
   },
-  opencode: {
-    id: "opencode",
-    name: "OpenCode",
-    detail: "Open-source terminal coding agent",
-    cli: "opencode",
-    herdrKind: "opencode",
-    tone: "cyan",
+  {
+    id: "cursor",
+    name: "Cursor Agent",
+    runtimes: ["herdr", "direct"],
+    detail: "Cursor terminal agent · print mode",
+    modelHint: "Use CLI default",
+    tier: "common",
   },
-  goose: {
-    id: "goose",
-    name: "Goose",
-    detail: "Block AI agent · autonomous edits",
-    cli: "goose",
-    herdrKind: "goose",
-    tone: "amber",
-  },
-  amazon_q: {
-    id: "amazon_q",
-    name: "Amazon Q",
-    detail: "AWS Q Developer CLI",
-    cli: "q",
-    herdrKind: "amazon_q",
-    tone: "rose",
-  },
-  windsurf: {
-    id: "windsurf",
-    name: "Windsurf",
-    detail: "Codeium Windsurf cascade CLI",
-    cli: "windsurf",
-    herdrKind: "windsurf",
-    tone: "emerald",
-  },
-  copilot: {
+  {
     id: "copilot",
     name: "GitHub Copilot",
-    detail: "Copilot CLI · gh extension",
-    cli: "copilot",
-    herdrKind: "copilot",
-    tone: "sky",
+    runtimes: ["herdr", "direct"],
+    detail: "GitHub coding agent · programmatic prompt",
+    modelHint: "Use CLI default",
+    tier: "common",
   },
-  deepseek: {
-    id: "deepseek",
-    name: "DeepSeek Harness",
-    detail: "dsh headless · plugin agent runtime",
-    cli: "dsh",
-    herdrKind: "deepseek",
-    tone: "cyan",
+  {
+    id: "opencode",
+    name: "OpenCode",
+    runtimes: ["herdr", "direct"],
+    detail: "Open-source coding agent · JSON events",
+    modelHint: "provider/model",
+    tier: "common",
   },
-};
+  {
+    id: "qwen",
+    name: "Qwen Code",
+    runtimes: ["herdr", "direct"],
+    detail: "Alibaba coding agent · headless mode",
+    modelHint: "Use CLI default",
+    tier: "common",
+  },
+  {
+    id: "aider",
+    name: "Aider",
+    runtimes: ["direct"],
+    detail: "Terminal pair programmer · one-shot message",
+    modelHint: "provider/model",
+    tier: "common",
+  },
+  {
+    id: "kimi",
+    name: "Kimi Code",
+    runtimes: ["herdr"],
+    detail: "Kimi coding agent · Herdr session",
+    modelHint: "Use CLI default",
+    tier: "extended",
+  },
+  {
+    id: "kiro",
+    name: "Kiro CLI",
+    runtimes: ["herdr"],
+    detail: "AWS Kiro agent · Herdr session",
+    modelHint: "Use CLI default",
+    tier: "extended",
+  },
+  {
+    id: "droid",
+    name: "Factory Droid",
+    runtimes: ["herdr"],
+    detail: "Factory coding agent · Herdr session",
+    modelHint: "Use CLI default",
+    tier: "extended",
+  },
+  {
+    id: "amp",
+    name: "Amp",
+    runtimes: ["herdr"],
+    detail: "Sourcegraph Amp · Herdr session",
+    modelHint: "Use CLI default",
+    tier: "extended",
+  },
+  {
+    id: "devin",
+    name: "Devin CLI",
+    runtimes: ["herdr"],
+    detail: "Devin terminal agent · Herdr session",
+    modelHint: "Use CLI default",
+    tier: "extended",
+  },
+  {
+    id: "cline",
+    name: "Cline",
+    runtimes: ["herdr"],
+    detail: "Cline coding agent · Herdr session",
+    modelHint: "Use CLI default",
+    tier: "extended",
+  },
+  {
+    id: "qodercli",
+    name: "Qoder CLI",
+    runtimes: ["herdr"],
+    detail: "Qoder coding agent · Herdr session",
+    modelHint: "Use CLI default",
+    tier: "extended",
+  },
+] as const;
 
-export const SUPPORTED_ACTORS = ACTOR_IDS;
+export type ActorId = (typeof ACTOR_CATALOG)[number]["id"];
+export type ActorRuntime = "herdr" | "direct";
 
-export function isSupportedActor(value: string): value is ActorId {
-  return (ACTOR_IDS as readonly string[]).includes(value);
+export const ACTOR_IDS = ACTOR_CATALOG.map((actor) => actor.id) as ActorId[];
+export const DIRECT_ACTOR_IDS = ACTOR_CATALOG.filter((actor) => (actor.runtimes as readonly string[]).includes("direct")).map((actor) => actor.id) as ActorId[];
+export const HERDR_ACTOR_IDS = ACTOR_CATALOG.filter((actor) => (actor.runtimes as readonly string[]).includes("herdr")).map((actor) => actor.id) as ActorId[];
+
+export function getActor(actorId: string) {
+  return ACTOR_CATALOG.find((actor) => actor.id === actorId);
 }
 
-export function actorCli(value: string): string {
-  if (isSupportedActor(value)) return ACTOR_REGISTRY[value].cli;
-  return value;
+export function actorSupportsRuntime(actorId: string, runtime: ActorRuntime) {
+  const actor = getActor(actorId);
+  return !!actor && (actor.runtimes as readonly string[]).includes(runtime);
 }

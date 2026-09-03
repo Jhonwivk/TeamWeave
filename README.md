@@ -1,6 +1,6 @@
 # TeamWeave
 
-TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把 Pi、Codex、Claude Code 变成可观察、可恢复、可审批的执行单元，同时支持单 Agent 任务和多 Agent 顺序协作。
+TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把主流 Coding Agent CLI 变成可观察、可恢复、可审批的执行单元，同时支持单 Agent 任务和多 Agent 顺序协作。
 
 它不是聊天界面，也不把多个模型简单放进同一个群聊。控制面保存任务、Session、handoff、执行事件与人工决策；本地 Worker 负责调用真实 Agent、管理 Git 分支，并在批准后创建 Pull Request。
 
@@ -10,12 +10,10 @@ TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把 P
 
 | 能力 | 当前实现 |
 | --- | --- |
-| 单 Agent | Pi、Codex、Claude Code 任一 Agent 独立执行 |
+| 单 Agent | Pi、Codex、Claude Code、Gemini、Cursor、Copilot、OpenCode、Qwen、Aider 等任一 Agent 独立执行 |
 | 多 Agent | 2–4 个 Session 按自定义角色和顺序协作 |
 | Agent Runtime | 优先使用 Herdr，未安装时可降级到直接 CLI |
 | 跨 Session 通信 | 持久化 handoff，包含摘要、产物路径、Git ref 和投递状态 |
-| 并行 Agent | 多 Agent 可选择 parallel 模式，各自使用 git worktree 后合并 |
-| 常用 Agent | Pi、Codex、Claude、Cursor、Aider、Gemini、OpenCode、Goose、Amazon Q、DeepSeek Harness 等 |
 | 人工介入 | Agent 阻塞时在控制台回复，并恢复原 Herdr Session |
 | Git 隔离 | 每个任务使用独立分支，多 Session 顺序修改同一分支 |
 | GitHub 交付 | 分支先供人工检查，批准后才创建 PR；不会自动合并 |
@@ -29,7 +27,7 @@ flowchart TD
     CP --> W[本地 Worker]
     W --> H[Herdr Runtime]
     W --> D[Direct CLI fallback]
-    H --> A[Pi / Codex / Claude]
+    H --> A[主流 Coding Agents]
     D --> A
     A --> G[隔离 Git 分支]
     G --> R[人工 Review]
@@ -59,9 +57,22 @@ flowchart TD
 控制面是 Vinext/React 应用，运行在 Cloudflare Workers 兼容环境中：
 
 - D1 保存仓库、Worker、任务、Agent Session、消息和事件。
-- 浏览器写操作要求 GitHub OAuth 登录。
+- 浏览器写操作要求 ChatGPT 身份。
 - Worker API 使用独立 Bearer Token。
 - GitHub 凭据和 Agent 登录信息始终留在本地 Worker。
+
+### 支持的 Agent actors
+
+Worker 通过可扩展 Actor Registry 探测本机 CLI。核心与常见 Agent 支持 Direct CLI；Herdr 可把更多终端 Agent 纳入持久 Session：
+
+| Actor | Direct CLI | Herdr Session |
+| --- | :---: | :---: |
+| Pi、Codex、Claude Code | ✓ | ✓ |
+| Gemini CLI、Cursor Agent、GitHub Copilot、OpenCode、Qwen Code | ✓ | ✓ |
+| Aider | ✓ | — |
+| Kimi Code、Kiro CLI、Factory Droid、Amp、Devin CLI、Cline、Qoder CLI | — | ✓ |
+
+`auto` 会按每个 Session 选择可用 Runtime，因此一个顺序 Workflow 可以同时包含 Herdr Agent 和 Direct-only Agent。显式选择 `direct` 或 `herdr` 时，控制面会在排队前校验兼容性。
 
 ### 本地 Worker
 
@@ -69,7 +80,7 @@ flowchart TD
 
 - Node.js 22.13+
 - Git 与 [GitHub CLI](https://cli.github.com/)
-- Pi、Codex、Claude Code 中至少一个
+- 上表中至少一个 Agent CLI
 - 推荐安装 [Herdr](https://herdr.dev/docs/install/)
 
 先完成本机认证：
@@ -80,7 +91,7 @@ gh auth setup-git
 herdr
 ```
 
-随后在 TeamWeave 的 **Workers** 页面注册本机，复制页面生成的一次性启动命令。Worker 会自动探测已安装的 Agent 与 Herdr。
+随后在 TeamWeave 的 **Workers** 页面注册本机，复制页面生成的一次性启动命令。Worker 会自动探测已安装的 Agent 与 Herdr；也可以用 `AGENTMUX_ACTORS=codex,gemini` 限制本次 Worker 暴露的 actor 集合。
 
 ### 开发验证
 
@@ -93,13 +104,14 @@ npm test
 
 ## 安全边界
 
-- Agent 不接收 TeamWeave Worker Token 或 `AGENTMUX_GITHUB_TOKEN`。
-- Direct CLI 默认沙箱：干净 `HOME`、禁用 credential helper、拦截 `git push` / `gh`。
-- 可选 Docker 沙箱（`AGENTMUX_SANDBOX=docker`），只挂载任务工作目录。
-- GitHub 远程操作只由 Worker delivery 路径执行；推荐 scoped `AGENTMUX_GITHUB_TOKEN`。
-- 每个任务使用独立工作分支；PR 只在控制台明确批准后创建。
-- Herdr 默认关闭；若启用（`AGENTMUX_ALLOW_HERDR=1`），隔离弱于 Direct，须从最小权限环境启动 Herdr。
+- Agent 不接收 TeamWeave Worker Token。
+- 直接 CLI 模式会移除传入 Agent 进程的 GitHub Token 环境变量。
+- 每个任务使用独立工作分支。
+- Agent 无权自动创建 PR、合并或修改 Git remote。
+- PR 只在控制台明确批准后创建。
 - 控制面只保存仓库地址，不保存本地 GitHub 登录凭据。
+
+Herdr 由本机用户启动，Agent 会继承 Herdr Server 的本地环境。生产使用时，应从不含多余敏感环境变量的终端启动 Herdr。
 
 ## 文档
 
@@ -109,7 +121,7 @@ npm test
 
 ## 当前限制
 
-- 多 Agent 支持顺序或并行执行；并行模式为每个 Session 创建独立 worktree，完成后合并到审查分支。
+- 多 Agent 当前采用顺序执行，尚未开放同一分支上的并发编辑。
 - Workflow 是显式 Session Pipeline，不包含自动规划任意 DAG。
 - 私有 Sites 入口可能在请求到达 Worker API 前拦截本地进程；真实远程 Worker 需要公开入口加应用层认证，或等价的可信网络通道。
 - 自动合并、组织级权限、预算策略和跨仓库事务尚未实现。
@@ -120,9 +132,7 @@ npm test
 app/                         控制台与 API Routes
 db/                          D1 / Drizzle 数据模型
 drizzle/                     数据库迁移
-lib/actors.ts               受支持 Agent 注册表
-lib/auth.ts                 GitHub OAuth 与会话
-lib/control-plane.ts        鉴权、ID 与数据库辅助函数
+lib/control-plane.ts         鉴权、ID 与数据库辅助函数
 public/agentmux-worker.mjs   本地 Agent Worker
 tests/                       构建和协议测试
 worker/                      Cloudflare Worker 入口

@@ -6,14 +6,9 @@
 
 ### 浏览器接口
 
-`/api/state`、`/api/repositories`、`/api/tasks` 和 `/api/workers/enroll` 使用 GitHub OAuth 会话 Cookie 确定 owner。未配置 OAuth 时，本地开发会回退到固定 owner `dev-local`。
+`/api/state`、`/api/repositories`、`/api/tasks` 和 `/api/workers/enroll` 使用部署平台注入的 `oai-authenticated-user-id` 确定 owner。
 
-登录入口：
-
-- `GET /api/auth/github?return_to=/`
-- `GET /api/auth/callback`（GitHub 回调）
-- `GET /api/auth/signout?return_to=/`
-- `GET /api/auth/me`（当前登录用户）
+调用方不应自行伪造该 Header；生产入口必须在请求到达应用前完成可信身份校验。
 
 ### Worker 接口
 
@@ -131,9 +126,9 @@ Content-Type: application/json
 
 约束：
 
-- `actor` 只能为注册表中的受支持 actor（见 `lib/actors.ts`）；
+- `actor` 必须来自 Actor Registry：`pi`、`codex`、`claude`、`gemini`、`cursor`、`copilot`、`opencode`、`qwen`、`aider`、`kimi`、`kiro`、`droid`、`amp`、`devin`、`cline` 或 `qodercli`；
 - `runtime` 为 `auto`、`herdr` 或 `direct`；
-- `executionStrategy` 为 `sequential` 或 `parallel`（多 Agent 任务）；
+- 显式 `runtime` 会校验所有 Step 的兼容性；例如 Aider 只能使用 `direct`，Kimi Code 只能使用 `herdr`；
 - 多 Agent 必须包含 2–4 个 Step；
 - `title` 最大 200 字符，`prompt` 最大 12000 字符；
 - 仓库必须属于当前 owner。
@@ -204,7 +199,7 @@ Action 与当前状态不匹配时返回 `409`。
 ```json
 {
   "platform": "dev-mac · darwin arm64",
-  "capabilities": ["codex", "claude"],
+  "capabilities": ["codex", "claude", "gemini", "aider"],
   "runtimes": ["herdr", "direct"]
 }
 ```
@@ -243,7 +238,7 @@ Action 与当前状态不匹配时返回 `409`。
 }
 ```
 
-领取条件会检查所有 Session 的 Agent 是否在 `capabilities` 中，以及指定 Runtime 是否被 Worker 支持。任务通过带旧状态条件的单条更新完成领取，避免两个 Worker 同时获得同一作业。
+领取条件会检查所有 Session 的 Agent 是否在 `capabilities` 中，以及指定 Runtime 是否被 Worker 支持。`auto` 会逐 Session 检查 Actor Registry 的 Runtime 矩阵，因此允许 Herdr 与 Direct-only actor 混合。任务通过带旧状态条件的单条更新完成领取，避免两个 Worker 同时获得同一作业。
 
 ### POST /api/worker/events
 

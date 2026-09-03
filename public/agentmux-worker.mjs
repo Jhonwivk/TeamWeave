@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { chmod, mkdir, writeFile, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { homedir, platform, arch, hostname } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -8,38 +8,29 @@ const CONTROL_URL = (process.env.AGENTMUX_URL || "").replace(/\/$/, "");
 const TOKEN = process.env.AGENTMUX_TOKEN || "";
 const ROOT = resolve(process.env.AGENTMUX_WORKDIR || join(homedir(), ".agentmux", "workspaces"));
 const HERDR_TIMEOUT = Number(process.env.AGENTMUX_HERDR_TIMEOUT || 30 * 60 * 1000);
-const SANDBOX_MODE = (process.env.AGENTMUX_SANDBOX || "local").toLowerCase(); // local | docker | off
-const WORKER_GITHUB_TOKEN = process.env.AGENTMUX_GITHUB_TOKEN || "";
-const ALLOW_HERDR = process.env.AGENTMUX_ALLOW_HERDR === "1";
-const SANDBOX_ROOT = resolve(process.env.AGENTMUX_SANDBOX_ROOT || join(homedir(), ".agentmux", "sandbox"));
-const ACTOR_DETECT = [
-  { id: "pi", cli: "pi" },
-  { id: "codex", cli: "codex" },
-  { id: "claude", cli: "claude" },
-  { id: "cursor", cli: "cursor" },
-  { id: "aider", cli: "aider" },
-  { id: "gemini", cli: "gemini" },
-  { id: "opencode", cli: "opencode" },
-  { id: "goose", cli: "goose" },
-  { id: "amazon_q", cli: "q" },
-  { id: "windsurf", cli: "windsurf" },
-  { id: "copilot", cli: "copilot" },
-  { id: "deepseek", cli: "dsh" },
-];
 
-const ACTOR_SECRET_ENV = [
-  "AGENTMUX_TOKEN",
-  "AGENTMUX_SITE_TOKEN",
-  "AGENTMUX_GITHUB_TOKEN",
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-  "GH_ENTERPRISE_TOKEN",
-  "GITHUB_ENTERPRISE_TOKEN",
-  "GIT_ASKPASS",
-  "GIT_TERMINAL_PROMPT",
-  "SSH_AUTH_SOCK",
-  "SSH_AGENT_PID",
-];
+// Keep this registry aligned with lib/actors.ts. Herdr resolves the actor kind
+// itself; commandCandidates are used for worker capability detection and the
+// direct CLI adapters below.
+const ACTOR_REGISTRY = {
+  pi: { commandCandidates: ["pi"], runtimes: ["herdr", "direct"] },
+  codex: { commandCandidates: ["codex"], runtimes: ["herdr", "direct"] },
+  claude: { commandCandidates: ["claude"], runtimes: ["herdr", "direct"] },
+  gemini: { commandCandidates: ["gemini"], runtimes: ["herdr", "direct"] },
+  cursor: { commandCandidates: ["agent", "cursor-agent", "cursor"], runtimes: ["herdr", "direct"] },
+  copilot: { commandCandidates: ["copilot"], runtimes: ["herdr", "direct"] },
+  opencode: { commandCandidates: ["opencode"], runtimes: ["herdr", "direct"] },
+  qwen: { commandCandidates: ["qwen"], runtimes: ["herdr", "direct"] },
+  aider: { commandCandidates: ["aider"], runtimes: ["direct"] },
+  kimi: { commandCandidates: ["kimi"], runtimes: ["herdr"] },
+  kiro: { commandCandidates: ["kiro-cli", "kiro"], runtimes: ["herdr"] },
+  droid: { commandCandidates: ["droid"], runtimes: ["herdr"] },
+  amp: { commandCandidates: ["amp"], runtimes: ["herdr"] },
+  devin: { commandCandidates: ["devin"], runtimes: ["herdr"] },
+  cline: { commandCandidates: ["cline"], runtimes: ["herdr"] },
+  qodercli: { commandCandidates: ["qodercli", "qoder"], runtimes: ["herdr"] },
+};
+let detectedCommands = new Map();
 
 if (!CONTROL_URL || !TOKEN) {
   console.error("Set AGENTMUX_URL and AGENTMUX_TOKEN before starting the worker.");
@@ -48,7 +39,6 @@ if (!CONTROL_URL || !TOKEN) {
 
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
-let sandboxReady = null;
 
 async function api(path, body) {
   const response = await fetch(`${CONTROL_URL}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
@@ -56,120 +46,14 @@ async function api(path, body) {
   return response.json();
 }
 
-function scrubActorEnv(baseEnv = process.env) {
-  const childEnv = { ...baseEnv };
-  for (const key of ACTOR_SECRET_ENV) delete childEnv[key];
-  for (const key of Object.keys(childEnv)) {
-    if (/^(GH_|GITHUB_|GITHUB_PAT|GIT_CREDENTIAL)/i.test(key)) delete childEnv[key];
-  }
-  childEnv.GIT_TERMINAL_PROMPT = "0";
-  childEnv.GCM_INTERACTIVE = "never";
-  return childEnv;
-}
-
-function workerDeliveryEnv(baseEnv = process.env) {
-  const childEnv = { ...baseEnv };
-  delete childEnv.AGENTMUX_TOKEN;
-  delete childEnv.AGENTMUX_SITE_TOKEN;
-  if (WORKER_GITHUB_TOKEN) {
-    childEnv.GH_TOKEN = WORKER_GITHUB_TOKEN;
-    childEnv.GITHUB_TOKEN = WORKER_GITHUB_TOKEN;
-  }
-  return childEnv;
-}
-
-async function ensureSandboxTools() {
-  if (sandboxReady) return sandboxReady;
-  const binDir = join(SANDBOX_ROOT, "bin");
-  await mkdir(binDir, { recursive: true });
-  const realGit = await resolveSystemBinary("git");
-  if (!realGit) throw new Error("Could not locate system git for sandbox wrappers");
-  const gitWrapper = `#!/usr/bin/env bash
-set -euo pipefail
-REAL_GIT="${realGit}"
-cmd="\${1:-}"
-if [[ "$cmd" == "push" || "$cmd" == "request-pull" || "$cmd" == "send-email" ]]; then
-  echo "teamweave-sandbox: blocked git $cmd (TeamWeave owns remote delivery)" >&2
-  exit 78
-fi
-if [[ "$cmd" == "remote" ]]; then
-  sub="\${2:-}"
-  if [[ "$sub" == "set-url" || "$sub" == "add" || "$sub" == "rename" || "$sub" == "remove" || "$sub" == "prune" ]]; then
-    echo "teamweave-sandbox: blocked git remote $sub" >&2
-    exit 78
-  fi
-fi
-exec "$REAL_GIT" "$@"
-`;
-  const ghWrapper = `#!/usr/bin/env bash
-echo "teamweave-sandbox: gh is disabled inside agent sandbox; TeamWeave worker owns GitHub delivery" >&2
-exit 78
-`;
-  const gitPath = join(binDir, "git");
-  const ghPath = join(binDir, "gh");
-  await writeFile(gitPath, gitWrapper, { mode: 0o755 });
-  await writeFile(ghPath, ghWrapper, { mode: 0o755 });
-  await chmod(gitPath, 0o755);
-  await chmod(ghPath, 0o755);
-  sandboxReady = { binDir, gitPath, ghPath, realGit };
-  return sandboxReady;
-}
-
-async function resolveSystemBinary(name) {
-  const result = await run("bash", ["-lc", `type -P ${name} || true`]);
-  const path = result.stdout.trim().split("\n").filter(Boolean).at(-1) || "";
-  if (path && !path.includes(`${SANDBOX_ROOT}/bin/`)) return path;
-  for (const candidate of [`/usr/bin/${name}`, `/bin/${name}`, `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`]) {
-    if (await exists(candidate)) return candidate;
-  }
-  return "";
-}
-
-async function prepareActorHome(job, session) {
-  const home = join(SANDBOX_ROOT, "homes", String(job.id), String(session.id));
-  await mkdir(join(home, ".config"), { recursive: true });
-  await writeFile(join(home, ".gitconfig"), `[credential]
-\thelper =
-[user]
-\tname = TeamWeave Agent
-\temail = teamweave-agent@users.noreply.github.com
-`, { mode: 0o600 });
-  return home;
-}
-
-async function actorLaunchEnv(job, session) {
-  const tools = await ensureSandboxTools();
-  const home = await prepareActorHome(job, session);
-  const childEnv = scrubActorEnv(process.env);
-  childEnv.HOME = home;
-  childEnv.USERPROFILE = home;
-  childEnv.XDG_CONFIG_HOME = join(home, ".config");
-  childEnv.GH_CONFIG_DIR = join(home, ".config", "gh");
-  childEnv.GIT_CONFIG_GLOBAL = join(home, ".gitconfig");
-  childEnv.GIT_CONFIG_NOSYSTEM = "1";
-  childEnv.TEAMWEAVE_SANDBOX = "1";
-  childEnv.PATH = `${tools.binDir}${childEnv.PATH ? `:${childEnv.PATH}` : ""}`;
-  return { env: childEnv, home, binDir: tools.binDir };
-}
-
 function run(command, args, options = {}) {
   return new Promise((resolveRun, rejectRun) => {
-    const childEnv = options.env
-      ? { ...options.env }
-      : options.actor
-        ? scrubActorEnv(process.env)
-        : options.delivery
-          ? workerDeliveryEnv(process.env)
-          : (() => {
-              const env = { ...process.env };
-              delete env.AGENTMUX_TOKEN;
-              delete env.AGENTMUX_SITE_TOKEN;
-              return env;
-            })();
-    if (!options.env && options.actor) {
+    const childEnv = { ...process.env };
+    delete childEnv.AGENTMUX_TOKEN;
+    delete childEnv.AGENTMUX_SITE_TOKEN;
+    if (options.actor) {
       delete childEnv.GH_TOKEN;
       delete childEnv.GITHUB_TOKEN;
-      delete childEnv.AGENTMUX_GITHUB_TOKEN;
     }
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -194,60 +78,6 @@ function run(command, args, options = {}) {
   });
 }
 
-async function runDelivery(command, args, options = {}) {
-  return run(command, args, { ...options, delivery: true });
-}
-
-async function dockerAvailable() {
-  try {
-    const result = await run("docker", ["info"], {});
-    return result.code === 0;
-  } catch {
-    return false;
-  }
-}
-
-async function runActorProcess(command, args, options = {}) {
-  const launch = await actorLaunchEnv(options.job, options.session);
-  const mode = SANDBOX_MODE === "off" ? "off" : SANDBOX_MODE;
-  if (mode === "docker") {
-    if (!(await dockerAvailable())) throw new Error("AGENTMUX_SANDBOX=docker but docker is unavailable");
-    const workDir = resolve(options.cwd);
-    const dockerArgs = [
-      "run", "--rm",
-      "--network", process.env.AGENTMUX_SANDBOX_NETWORK || "bridge",
-      "-v", `${workDir}:/workspace:rw`,
-      "-v", `${launch.binDir}:/opt/teamweave/bin:ro`,
-      "-v", `${launch.home}:/sandbox-home:rw`,
-      "-w", "/workspace",
-      "-e", "HOME=/sandbox-home",
-      "-e", "GIT_CONFIG_GLOBAL=/sandbox-home/.gitconfig",
-      "-e", "GIT_CONFIG_NOSYSTEM=1",
-      "-e", "GH_CONFIG_DIR=/sandbox-home/.config/gh",
-      "-e", "TEAMWEAVE_SANDBOX=1",
-      "-e", `PATH=/opt/teamweave/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
-      "--entrypoint", command,
-      process.env.AGENTMUX_SANDBOX_IMAGE || "node:22.19-bookworm",
-      ...args,
-    ];
-    // Pass through non-secret env that agents often need (model endpoints), excluding secrets.
-    for (const [key, value] of Object.entries(launch.env)) {
-      if (!value || ACTOR_SECRET_ENV.includes(key) || /^(GH_|GITHUB_|AGENTMUX_|SSH_)/i.test(key)) continue;
-      if (["HOME", "PATH", "USERPROFILE", "XDG_CONFIG_HOME", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "TEAMWEAVE_SANDBOX"].includes(key)) continue;
-      if (/^(OPENAI|ANTHROPIC|DEEPSEEK|GOOGLE|GEMINI|AWS|AZURE|CURSOR|CLAUDE|CODEX|PI)_/i.test(key) || key.endsWith("_API_KEY") || key.endsWith("_BASE_URL")) {
-        dockerArgs.splice(dockerArgs.indexOf("--entrypoint"), 0, "-e", `${key}=${value}`);
-      }
-    }
-    return run("docker", dockerArgs, { onOutput: options.onOutput });
-  }
-
-  return run(command, args, {
-    cwd: options.cwd,
-    env: launch.env,
-    onOutput: options.onOutput,
-  });
-}
-
 async function has(command) {
   try {
     const result = await run(command, ["--version"]);
@@ -257,10 +87,20 @@ async function has(command) {
   }
 }
 
-
 async function detectCapabilities() {
   const names = [];
-  for (const actor of ACTOR_DETECT) if (await has(actor.cli)) names.push(actor.id);
+  detectedCommands = new Map();
+  const requested = new Set((process.env.AGENTMUX_ACTORS || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
+  for (const [name, actor] of Object.entries(ACTOR_REGISTRY)) {
+    if (requested.size && !requested.has(name)) continue;
+    for (const command of actor.commandCandidates) {
+      if (await has(command)) {
+        names.push(name);
+        detectedCommands.set(name, command);
+        break;
+      }
+    }
+  }
   return names;
 }
 
@@ -306,63 +146,76 @@ function parseJsonOutput(output) {
 }
 
 function directActorCommand(session, prompt) {
+  const command = detectedCommands.get(session.actor) || ACTOR_REGISTRY[session.actor]?.commandCandidates[0];
+  if (!command) throw new Error(`No executable was detected for ${session.actor}`);
   if (session.actor === "pi") {
     const args = ["--mode", "json", "--approve", "--no-session"];
     if (session.model) args.push("--model", String(session.model));
-    return { command: "pi", args: [...args, prompt] };
+    return { command, args: [...args, prompt] };
   }
   if (session.actor === "codex") {
     const args = ["exec", "--json", "--sandbox", "workspace-write", "--ephemeral"];
     if (session.model) args.push("--model", String(session.model));
-    return { command: "codex", args: [...args, prompt] };
+    return { command, args: [...args, prompt] };
   }
   if (session.actor === "claude") {
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"];
     if (session.model) args.push("--model", String(session.model));
-    return { command: "claude", args: [...args, prompt] };
-  }
-  if (session.actor === "cursor") {
-    const args = ["agent", "-p", prompt, "--output-format", "text"];
-    if (session.model) args.splice(1, 0, "--model", String(session.model));
-    return { command: "cursor", args };
-  }
-  if (session.actor === "aider") {
-    const args = ["--message", prompt, "--yes-always", "--no-show-model-warnings"];
-    if (session.model) args.unshift("--model", String(session.model));
-    return { command: "aider", args };
+    return { command, args: [...args, prompt] };
   }
   if (session.actor === "gemini") {
-    const args = ["-p", prompt];
-    if (session.model) args.unshift("--model", String(session.model));
-    return { command: "gemini", args };
-  }
-  if (session.actor === "opencode") {
-    const args = ["run", prompt];
-    if (session.model) args.unshift("--model", String(session.model));
-    return { command: "opencode", args };
-  }
-  if (session.actor === "goose") {
-    const args = ["run", "--prompt", prompt];
+    const args = ["--prompt", prompt, "--output-format", "json", "--yolo"];
     if (session.model) args.push("--model", String(session.model));
-    return { command: "goose", args };
+    return { command, args };
   }
-  if (session.actor === "amazon_q") {
-    return { command: "q", args: ["chat", "--no-interactive", prompt] };
-  }
-  if (session.actor === "windsurf") {
-    const args = ["-p", prompt];
-    if (session.model) args.unshift("--model", String(session.model));
-    return { command: "windsurf", args };
+  if (session.actor === "cursor") {
+    const args = ["-p", "--force", "--output-format", "json"];
+    if (session.model) args.push("--model", String(session.model));
+    return { command, args: [...args, prompt] };
   }
   if (session.actor === "copilot") {
-    const args = ["-p", prompt];
-    if (session.model) args.unshift("--model", String(session.model));
-    return { command: "copilot", args };
+    const args = ["-p", prompt, "-s", "--no-ask-user", "--allow-tool", "shell(*), write"];
+    if (session.model) args.push("--model", String(session.model));
+    return { command, args };
   }
-  if (session.actor === "deepseek") {
-    return { command: "dsh", args: ["--profile", "headless", prompt] };
+  if (session.actor === "opencode") {
+    const args = ["run", "--auto", "--format", "json"];
+    if (session.model) args.push("--model", String(session.model));
+    return { command, args: [...args, prompt] };
   }
-  throw new Error(`Unsupported actor: ${session.actor}`);
+  if (session.actor === "qwen") {
+    const args = ["--prompt", prompt, "--output-format", "json", "--yolo"];
+    if (session.model) args.push("--model", String(session.model));
+    return { command, args };
+  }
+  if (session.actor === "aider") {
+    const args = ["--message", prompt, "--yes", "--no-auto-commits", "--no-dirty-commits"];
+    if (session.model) args.push("--model", String(session.model));
+    return { command, args };
+  }
+  throw new Error(`${session.actor} is supported through Herdr; no direct CLI adapter is configured`);
+}
+
+function actorSupportsRuntime(actor, runtime) {
+  return !!ACTOR_REGISTRY[actor]?.runtimes.includes(runtime);
+}
+
+function selectRuntime(job, session, installedRuntimes) {
+  if (job.runtime === "herdr") {
+    if (!installedRuntimes.includes("herdr") || !actorSupportsRuntime(session.actor, "herdr")) {
+      throw new Error(`${session.actor} requires a Herdr runtime on this worker`);
+    }
+    return "herdr";
+  }
+  if (job.runtime === "direct") {
+    if (!installedRuntimes.includes("direct") || !actorSupportsRuntime(session.actor, "direct")) {
+      throw new Error(`${session.actor} does not have a direct CLI adapter; choose Auto or Herdr`);
+    }
+    return "direct";
+  }
+  if (installedRuntimes.includes("herdr") && actorSupportsRuntime(session.actor, "herdr")) return "herdr";
+  if (installedRuntimes.includes("direct") && actorSupportsRuntime(session.actor, "direct")) return "direct";
+  throw new Error(`${session.actor} is not available on this worker`);
 }
 
 function herdrModelArgs(session) {
@@ -371,8 +224,7 @@ function herdrModelArgs(session) {
   return ["--", "--model", String(session.model)];
 }
 
-function promptFor(job, session, incoming, options = {}) {
-  const parallel = options.parallel === true;
+function promptFor(job, session, incoming) {
   const prior = incoming.length
     ? [
         "",
@@ -390,7 +242,6 @@ function promptFor(job, session, incoming, options = {}) {
     `Task: ${job.title}`,
     `Your role: ${session.role}`,
     `Stage: ${Number(session.ordinal) + 1} of ${job.sessions.length}`,
-    parallel ? "Execution mode: parallel worktree" : "Execution mode: sequential handoff",
     "",
     job.prompt,
     ...prior,
@@ -398,9 +249,7 @@ function promptFor(job, session, incoming, options = {}) {
     "Work only inside this repository and current branch. Inspect upstream changes before editing.",
     "Make the smallest coherent change and run relevant checks.",
     "Do not push, merge, create a pull request, or alter git remotes. TeamWeave owns Git delivery.",
-    parallel
-      ? "You are running in an isolated worktree. Focus on your role and leave branch integration to TeamWeave."
-      : "At the end, give a concise handoff: decisions, changed files, checks, risks, and what the next agent should do.",
+    "At the end, give a concise handoff: decisions, changed files, checks, risks, and what the next agent should do.",
   ].join("\n");
 }
 
@@ -412,12 +261,12 @@ async function prepareRepository(job) {
     console.log(`Cloning ${job.repository}...`);
     const ghReady = await has("gh");
     const result = ghReady
-      ? await runDelivery("gh", ["repo", "clone", job.repository, repositoryDir, "--", "--filter=blob:none"])
-      : await runDelivery("git", ["clone", "--filter=blob:none", job.repositoryUrl, repositoryDir]);
+      ? await run("gh", ["repo", "clone", job.repository, repositoryDir, "--", "--filter=blob:none"])
+      : await run("git", ["clone", "--filter=blob:none", job.repositoryUrl, repositoryDir]);
     if (result.code !== 0) throw new Error(result.stderr || "Repository clone failed");
   }
 
-  await runDelivery("git", ["fetch", "origin", "--prune"], { cwd: repositoryDir });
+  await run("git", ["fetch", "origin", "--prune"], { cwd: repositoryDir });
   const branch = job.workBranch || `teamweave/${String(job.id).replace("task_", "").slice(0, 12)}`;
   const current = await run("git", ["branch", "--show-current"], { cwd: repositoryDir });
   if (current.stdout.trim() !== branch) {
@@ -431,34 +280,6 @@ async function prepareRepository(job) {
   await run("git", ["config", "user.name", "TeamWeave Worker"], { cwd: repositoryDir });
   await run("git", ["config", "user.email", "teamweave-worker@users.noreply.github.com"], { cwd: repositoryDir });
   return { repositoryDir, branch };
-}
-
-async function prepareSessionWorktree(job, session, repositoryDir, integrationBranch) {
-  const worktreeRoot = join(repositoryDir, ".teamweave-worktrees");
-  await mkdir(worktreeRoot, { recursive: true });
-  const worktreePath = join(worktreeRoot, session.id);
-  const sessionBranch = `${integrationBranch}--sess-${session.ordinal}`;
-  const gitMarker = join(worktreePath, ".git");
-  if (!(await exists(gitMarker))) {
-    const add = await run("git", ["worktree", "add", "-B", sessionBranch, worktreePath, `origin/${job.baseBranch}`], { cwd: repositoryDir });
-    if (add.code !== 0) throw new Error(add.stderr || `Could not create worktree for ${session.role}`);
-  } else {
-    await run("git", ["checkout", sessionBranch], { cwd: worktreePath });
-    const reset = await run("git", ["reset", "--hard", `origin/${job.baseBranch}`], { cwd: worktreePath });
-    if (reset.code !== 0) throw new Error(reset.stderr || `Could not reset worktree for ${session.role}`);
-  }
-  await run("git", ["config", "user.name", "TeamWeave Worker"], { cwd: worktreePath });
-  await run("git", ["config", "user.email", "teamweave-worker@users.noreply.github.com"], { cwd: worktreePath });
-  return { worktreePath, sessionBranch };
-}
-
-async function mergeSessionBranch(repositoryDir, sessionBranch, integrationBranch) {
-  await run("git", ["checkout", integrationBranch], { cwd: repositoryDir });
-  const merge = await run("git", ["merge", "--no-edit", sessionBranch], { cwd: repositoryDir });
-  if (merge.code !== 0) {
-    await run("git", ["merge", "--abort"], { cwd: repositoryDir });
-    throw new Error(`Could not merge parallel session branch ${sessionBranch}: ${(merge.stderr || merge.stdout).slice(-2000)}`);
-  }
 }
 
 function streamReporter(taskId, sessionId) {
@@ -572,22 +393,17 @@ async function markSession(job, session, status, extra = {}) {
   });
 }
 
-async function runDirectSession(job, session, repositoryDir, options = {}) {
+async function runDirectSession(job, session, repositoryDir) {
   const incoming = await incomingMessages(job, session);
-  const prompt = promptFor(job, session, incoming, options);
-  const sandboxLabel = SANDBOX_MODE === "off" ? "unsandboxed" : SANDBOX_MODE;
-  await markSession(job, session, "working", {
-    runtime: "direct",
-    runtimeName: `direct:${session.id}:${sandboxLabel}`,
-  });
+  const prompt = promptFor(job, session, incoming);
+  await markSession(job, session, "working", { runtime: "direct", runtimeName: `direct:${session.id}` });
   const adapter = directActorCommand(session, prompt);
   const reporter = streamReporter(job.id, session.id);
   let result;
   try {
-    result = await runActorProcess(adapter.command, adapter.args, {
+    result = await run(adapter.command, adapter.args, {
       cwd: repositoryDir,
-      job,
-      session,
+      actor: true,
       onOutput: (text) => reporter.add(text),
     });
   } finally {
@@ -645,9 +461,6 @@ async function herdrAgentStatus(name) {
 }
 
 async function ensureHerdrAgent(job, session, repositoryDir, workspaceState) {
-  if (!ALLOW_HERDR) {
-    throw new Error("Herdr inherits the full host environment and is disabled by default. Set AGENTMUX_ALLOW_HERDR=1 only after launching Herdr from a minimal-privilege shell, or use runtime=direct.");
-  }
   const runtimeName = session.runtimeName || herdrAgentName(job, session);
   const existing = await herdrAgentStatus(runtimeName);
   if (existing) {
@@ -657,24 +470,7 @@ async function ensureHerdrAgent(job, session, repositoryDir, workspaceState) {
   }
   const location = await ensureHerdrPane(job, session, repositoryDir, workspaceState);
   await markSession(job, session, "starting", { runtime: "herdr", runtimeName, ...location });
-  const tools = await ensureSandboxTools();
-  const home = await prepareActorHome(job, session);
-  // Best-effort: put wrappers ahead of PATH for this agent start. Herdr Server may still retain ambient host secrets.
-  await herdrCommand([
-    "agent", "start", runtimeName, "--kind", session.actor, "--pane", location.paneId, "--timeout", "120000",
-    ...herdrModelArgs(session),
-  ], {
-    cwd: repositoryDir,
-    env: {
-      ...scrubActorEnv(process.env),
-      PATH: `${tools.binDir}${process.env.PATH ? `:${process.env.PATH}` : ""}`,
-      HOME: home,
-      GH_CONFIG_DIR: join(home, ".config", "gh"),
-      GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
-      GIT_CONFIG_NOSYSTEM: "1",
-      TEAMWEAVE_SANDBOX: "1",
-    },
-  });
+  await herdrCommand(["agent", "start", runtimeName, "--kind", session.actor, "--pane", location.paneId, "--timeout", "120000", ...herdrModelArgs(session)], { cwd: repositoryDir, actor: true });
   return { runtimeName, ...location };
 }
 
@@ -756,25 +552,21 @@ async function runHerdrSession(job, session, repositoryDir, workspaceState) {
 }
 
 async function runWorkflow(job) {
-  if (job.executionStrategy === "parallel" && job.sessions.length > 1) {
-    return runWorkflowParallel(job);
-  }
   const heartbeat = setInterval(() => void sendEvent(job.id, { kind: "worker.heartbeat", message: "running" }), 10000);
   try {
     const { repositoryDir, branch } = await prepareRepository(job);
     const installedRuntimes = await detectRuntimes();
-    let runtime = job.runtime === "direct" ? "direct" : installedRuntimes.includes("herdr") && ALLOW_HERDR ? "herdr" : "direct";
-    if (job.runtime === "herdr" && runtime !== "herdr") {
-      throw new Error("This task requires Herdr. Install Herdr, start it from a minimal-privilege shell, set AGENTMUX_ALLOW_HERDR=1, and retry.");
-    }
-    if (runtime === "herdr" && !ALLOW_HERDR) runtime = "direct";
+    const pendingSessions = job.sessions.filter((session) => session.status !== "done");
+    const plannedRuntimes = pendingSessions.map((session) => selectRuntime(job, session, installedRuntimes));
+    const plannedRuntimeSet = [...new Set(plannedRuntimes)];
+    const plannedRuntime = plannedRuntimeSet.length === 1 ? plannedRuntimeSet[0] : "mixed";
     await sendEvent(job.id, {
       status: "running",
       activeSessionId: job.activeSessionId || job.sessions.find((session) => session.status !== "done")?.id || null,
       kind: "runtime.selected",
-      message: `${runtime === "herdr" ? "Herdr persistent runtime" : "Direct sandboxed CLI"} selected for ${job.sessions.length} session${job.sessions.length === 1 ? "" : "s"} (sandbox=${SANDBOX_MODE})`,
+      message: `${plannedRuntime === "mixed" ? "Mixed actor runtimes" : plannedRuntime === "herdr" ? "Herdr persistent runtime" : "Direct CLI"} selected per actor for ${job.sessions.length} session${job.sessions.length === 1 ? "" : "s"}`,
       workBranch: branch,
-      payload: { runtime, mode: job.executionMode, sandbox: SANDBOX_MODE, deliveryToken: WORKER_GITHUB_TOKEN ? "task-scoped" : "ambient" },
+      payload: { runtime: plannedRuntime, runtimes: plannedRuntimeSet, mode: job.executionMode },
     });
 
     const existingWorkspace = job.sessions.find((session) => session.workspaceId);
@@ -786,6 +578,7 @@ async function runWorkflow(job) {
     };
     let finalSummary = "";
     const diffStats = [];
+    const runtimesUsed = new Set();
 
     for (let index = 0; index < job.sessions.length; index += 1) {
       const session = job.sessions[index];
@@ -794,18 +587,19 @@ async function runWorkflow(job) {
         continue;
       }
       let result;
+      let sessionRuntime = selectRuntime(job, session, installedRuntimes);
       try {
-        result = runtime === "herdr"
+        result = sessionRuntime === "herdr"
           ? await runHerdrSession(job, session, repositoryDir, workspaceState)
           : await runDirectSession(job, session, repositoryDir);
       } catch (error) {
-        if (runtime === "herdr" && job.runtime === "auto" && session.status !== "blocked") {
+        if (sessionRuntime === "herdr" && job.runtime === "auto" && actorSupportsRuntime(session.actor, "direct") && installedRuntimes.includes("direct") && session.status !== "blocked") {
           await sendEvent(job.id, {
             kind: "runtime.fallback",
             message: `Herdr was unavailable; continuing ${session.role} with direct CLI`,
             payload: { reason: error instanceof Error ? error.message : String(error) },
           });
-          runtime = "direct";
+          sessionRuntime = "direct";
           session.status = "pending";
           result = await runDirectSession(job, session, repositoryDir);
         } else {
@@ -813,14 +607,15 @@ async function runWorkflow(job) {
         }
       }
       if (result.blocked) return;
+      runtimesUsed.add(sessionRuntime);
       finalSummary = result.summary || finalSummary;
       if (result.diffStat) diffStats.push(`${session.role}: ${result.diffStat}`);
       const nextSession = job.sessions[index + 1];
       if (nextSession) await createHandoff(job, session, nextSession, result.summary, result.artifacts || [], result.gitRef || "");
     }
 
-    const push = await runDelivery("git", ["push", "--force-with-lease", "-u", "origin", branch], { cwd: repositoryDir });
-    if (push.code !== 0) throw new Error(push.stderr || "Could not push isolated branch. Set AGENTMUX_GITHUB_TOKEN or run 'gh auth setup-git' and retry.");
+    const push = await run("git", ["push", "--force-with-lease", "-u", "origin", branch], { cwd: repositoryDir });
+    if (push.code !== 0) throw new Error(push.stderr || "Could not push isolated branch. Run 'gh auth setup-git' and retry.");
     const compareUrl = `https://github.com/${job.repository}/compare/${encodeURIComponent(job.baseBranch)}...${encodeURIComponent(branch)}?expand=1`;
     await sendEvent(job.id, {
       status: "review",
@@ -830,55 +625,7 @@ async function runWorkflow(job) {
       summary: finalSummary || "All agent sessions completed.",
       diffStat: diffStats.join("\n") || "No file changes",
       workBranch: branch,
-      payload: { compareUrl, runtime, sessionCount: job.sessions.length, sandbox: SANDBOX_MODE },
-    });
-  } finally {
-    clearInterval(heartbeat);
-  }
-}
-
-async function runWorkflowParallel(job) {
-  const heartbeat = setInterval(() => void sendEvent(job.id, { kind: "worker.heartbeat", message: "running" }), 10000);
-  try {
-    const { repositoryDir, branch } = await prepareRepository(job);
-    await sendEvent(job.id, {
-      status: "running",
-      activeSessionId: null,
-      kind: "runtime.selected",
-      message: `Parallel sandboxed direct runtime selected for ${job.sessions.length} sessions (sandbox=${SANDBOX_MODE})`,
-      workBranch: branch,
-      payload: { runtime: "direct", mode: job.executionMode, executionStrategy: "parallel", sandbox: SANDBOX_MODE },
-    });
-
-    const pendingSessions = job.sessions.filter((session) => session.status !== "done");
-    const results = await Promise.all(pendingSessions.map(async (session) => {
-      const { worktreePath, sessionBranch } = await prepareSessionWorktree(job, session, repositoryDir, branch);
-      await markSession(job, session, "working", { runtime: "direct", runtimeName: `parallel:${session.id}` });
-      const result = await runDirectSession(job, session, worktreePath, { parallel: true });
-      return { session, sessionBranch, result };
-    }));
-
-    if (results.some((entry) => entry.result?.blocked)) return;
-
-    for (const session of [...job.sessions].sort((left, right) => left.ordinal - right.ordinal)) {
-      const entry = results.find((item) => item.session.id === session.id);
-      if (entry) await mergeSessionBranch(repositoryDir, entry.sessionBranch, branch);
-    }
-
-    const finalSummary = results.map((entry) => `${entry.session.role}:\n${entry.result.summary || "Completed"}`).join("\n\n");
-    const diffStats = results.map((entry) => `${entry.session.role}: ${entry.result.diffStat || "No file changes"}`);
-    const push = await runDelivery("git", ["push", "--force-with-lease", "-u", "origin", branch], { cwd: repositoryDir });
-    if (push.code !== 0) throw new Error(push.stderr || "Could not push isolated branch. Set AGENTMUX_GITHUB_TOKEN or run 'gh auth setup-git' and retry.");
-    const compareUrl = `https://github.com/${job.repository}/compare/${encodeURIComponent(job.baseBranch)}...${encodeURIComponent(branch)}?expand=1`;
-    await sendEvent(job.id, {
-      status: "review",
-      activeSessionId: null,
-      kind: "workflow.completed",
-      message: `${job.sessions.length}-session parallel workflow complete; branch is ready for review`,
-      summary: finalSummary || "All parallel agent sessions completed.",
-      diffStat: diffStats.join("\n") || "No file changes",
-      workBranch: branch,
-      payload: { compareUrl, runtime: "direct", executionStrategy: "parallel", sessionCount: job.sessions.length, sandbox: SANDBOX_MODE },
+      payload: { compareUrl, runtime: runtimesUsed.size === 1 ? [...runtimesUsed][0] : "mixed", runtimes: [...runtimesUsed], sessionCount: job.sessions.length },
     });
   } finally {
     clearInterval(heartbeat);
@@ -890,11 +637,11 @@ async function publish(job) {
   try {
     const { repositoryDir, branch } = await prepareRepository(job);
     if (!(await has("gh"))) throw new Error("GitHub CLI is required to create a pull request.");
-    let view = await runDelivery("gh", ["pr", "view", branch, "--json", "url", "--jq", ".url"], { cwd: repositoryDir });
+    let view = await run("gh", ["pr", "view", branch, "--json", "url", "--jq", ".url"], { cwd: repositoryDir });
     if (view.code !== 0 || !view.stdout.trim()) {
       const actors = job.sessions.map((session) => `${session.role}: ${session.actor}`).join("\n");
       const body = `Created by TeamWeave after human approval.\n\nTask: ${job.title}\nMode: ${job.executionMode}\nSessions:\n${actors}\nAttempt: ${job.attempt}`;
-      view = await runDelivery("gh", ["pr", "create", "--base", job.baseBranch, "--head", branch, "--title", job.title, "--body", body], { cwd: repositoryDir });
+      view = await run("gh", ["pr", "create", "--base", job.baseBranch, "--head", branch, "--title", job.title, "--body", body], { cwd: repositoryDir });
     }
     if (view.code !== 0) throw new Error(view.stderr || "Could not create pull request");
     const prUrl = view.stdout.trim().split("\n").find((line) => line.startsWith("http")) || "";
@@ -906,15 +653,11 @@ async function publish(job) {
 
 console.log(`TeamWeave worker ${hostname()} · ${platform()} ${arch()}`);
 await mkdir(ROOT, { recursive: true });
-await ensureSandboxTools();
-console.log(`Sandbox mode: ${SANDBOX_MODE}${SANDBOX_MODE === "docker" ? ` · image ${process.env.AGENTMUX_SANDBOX_IMAGE || "node:22.19-bookworm"}` : ""}`);
-console.log(`GitHub delivery: ${WORKER_GITHUB_TOKEN ? "AGENTMUX_GITHUB_TOKEN (worker-only)" : "ambient gh/git credentials (weaker)"}`);
-if (!ALLOW_HERDR) console.log("Herdr disabled by default (set AGENTMUX_ALLOW_HERDR=1 to opt in).");
 let detectedActors = await detectCapabilities();
 let detectedRuntimes = await detectRuntimes();
 console.log(`Detected actors: ${detectedActors.join(", ") || "none"}`);
 console.log(`Detected runtimes: ${detectedRuntimes.join(", ")}`);
-if (!detectedActors.length) console.log("Install and authenticate a supported agent CLI, then restart.");
+if (!detectedActors.length) console.log("Install and authenticate a supported coding agent, then restart.");
 
 while (true) {
   try {

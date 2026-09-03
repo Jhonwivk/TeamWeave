@@ -1,5 +1,5 @@
-import { SUPPORTED_ACTORS } from "@/lib/actors";
 import { cleanString, database, jsonBody, now, parseJson, requireWorker } from "@/lib/control-plane";
+import { ACTOR_IDS, actorSupportsRuntime } from "@/lib/actors";
 
 export const dynamic = "force-dynamic";
 
@@ -28,10 +28,22 @@ async function hydrateJob(candidate: Candidate, operation: "run" | "resume" | "p
 }
 
 function supports(candidate: Candidate, sessions: Record<string, unknown>[], capabilities: string[], runtimes: string[]) {
-  if (!sessions.length || !sessions.every((session) => capabilities.includes(String(session.actor)))) return false;
-  if (candidate.runtime === "herdr") return runtimes.includes("herdr");
-  if (candidate.runtime === "direct") return runtimes.includes("direct");
-  return runtimes.includes("herdr") || runtimes.includes("direct");
+  if (!sessions.length) return false;
+  const actorReady = sessions.every((session) => {
+    const actor = String(session.actor);
+    return (ACTOR_IDS as readonly string[]).includes(actor) && capabilities.includes(actor);
+  });
+  if (!actorReady) return false;
+  if (candidate.runtime === "herdr" || candidate.runtime === "direct") {
+    const runtime = candidate.runtime;
+    return runtimes.includes(runtime) && sessions.every((session) => actorSupportsRuntime(String(session.actor), runtime));
+  }
+  // Auto jobs may mix runtimes: Herdr-backed sessions stay persistent while
+  // direct-only actors (for example Aider) use their one-shot CLI adapter.
+  return sessions.every((session) =>
+    (runtimes.includes("herdr") && actorSupportsRuntime(String(session.actor), "herdr")) ||
+    (runtimes.includes("direct") && actorSupportsRuntime(String(session.actor), "direct"))
+  );
 }
 
 export async function POST(request: Request) {
@@ -39,13 +51,15 @@ export async function POST(request: Request) {
   if ("error" in auth) return auth.error;
   const body = await jsonBody<PollInput>(request);
   const timestamp = now();
-  const capabilities = Array.isArray(body.capabilities) ? body.capabilities.filter((item) => SUPPORTED_ACTORS.includes(item as typeof SUPPORTED_ACTORS[number])) : [];
+  const capabilities = Array.isArray(body.capabilities)
+    ? body.capabilities.map((item) => String(item).toLowerCase()).filter((item, index, items) => (ACTOR_IDS as readonly string[]).includes(item) && items.indexOf(item) === index).slice(0, ACTOR_IDS.length)
+    : [];
   const runtimes = Array.isArray(body.runtimes) ? body.runtimes.filter((item) => ["herdr", "direct"].includes(item)).slice(0, 2) : ["direct"];
   await database().prepare("UPDATE workers SET platform = ?, capabilities = ?, runtimes = ?, last_seen_at = ? WHERE id = ?")
     .bind(cleanString(body.platform, 120) || "unknown", JSON.stringify(capabilities), JSON.stringify(runtimes), timestamp, auth.worker.id).run();
 
   const recoverable = await database().prepare(
-    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.execution_strategy AS executionStrategy, t.runtime,
+    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.runtime,
       t.active_session_id AS activeSessionId, t.base_branch AS baseBranch,
       t.work_branch AS workBranch, t.status, t.attempt, r.full_name AS repository,
       r.url AS repositoryUrl
@@ -67,7 +81,7 @@ export async function POST(request: Request) {
   }
 
   const candidates = await database().prepare(
-    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.execution_strategy AS executionStrategy, t.runtime,
+    `SELECT t.id, t.title, t.prompt, t.actor, t.model, t.mode AS executionMode, t.runtime,
       t.active_session_id AS activeSessionId, t.base_branch AS baseBranch,
       t.work_branch AS workBranch, t.status, t.attempt, r.full_name AS repository,
       r.url AS repositoryUrl

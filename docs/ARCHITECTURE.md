@@ -82,7 +82,22 @@ Worker 会在独立工作分支运行 Agent。Agent 完成后，任务进入 `re
 5. 下一 Session 在同一分支上启动，并收到原始目标、自己的角色和已有 handoff。
 6. 最后一个 Session 完成后，Worker 汇总 diff，任务进入人工 Review。
 
-顺序执行是刻意的安全选择：多个 Agent 并发修改同一工作树会引入非确定性冲突，而独立 worktree 又需要额外的合并协调。当前协议先保证交接可审计和任务可恢复，再扩展并行 DAG。
+顺序执行是刻意的安全选择：多个 Agent 并发修改同一工作树会引入非确定性冲突。TeamWeave 现在支持 `parallel` 执行策略：每个 Session 使用独立 git worktree，完成后按 ordinal 合并到审查分支。Herdr 仍主要用于顺序工作流；并行模式使用 Direct CLI。
+
+## 并行 Agent 执行
+
+```mermaid
+flowchart LR
+    Base[baseBranch] --> W1[worktree sess-0]
+    Base --> W2[worktree sess-1]
+    Base --> W3[worktree sess-2]
+    W1 --> Merge[integration branch]
+    W2 --> Merge
+    W3 --> Merge
+    Merge --> Review[Human review]
+```
+
+并行模式下不使用 handoff 链；每个 Session 从相同任务 prompt 和 base branch 启动，Worker 在所有 Session 完成后合并分支并推送。
 
 ## Herdr 集成
 
@@ -132,7 +147,7 @@ Agent 不能自动创建 PR 或合并。发布操作由 Worker 的独立 `publis
 
 ## 信任边界
 
-- 浏览器 API 使用 ChatGPT 身份确定 owner。
+- 浏览器 API 使用 GitHub OAuth 会话确定 owner。
 - Worker 注册时只返回一次原始 Token，服务端仅保存 Hash。
 - Worker 只能读取和更新已分配给同一 owner/worker 的任务。
 - Session 更新和消息两端都验证必须属于当前 Task。

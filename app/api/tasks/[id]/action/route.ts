@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 type ActionInput = { action?: string; reply?: string };
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  const auth = requireOwner(request);
+  const auth = await requireOwner(request);
   if ("error" in auth) return auth.error;
   const { id } = await context.params;
   const { action, reply } = await jsonBody<ActionInput>(request);

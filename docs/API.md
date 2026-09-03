@@ -6,9 +6,14 @@
 
 ### 浏览器接口
 
-`/api/state`、`/api/repositories`、`/api/tasks` 和 `/api/workers/enroll` 使用部署平台注入的 `oai-authenticated-user-id` 确定 owner。
+`/api/state`、`/api/repositories`、`/api/tasks` 和 `/api/workers/enroll` 使用 GitHub OAuth 会话 Cookie 确定 owner。未配置 OAuth 时，本地开发会回退到固定 owner `dev-local`。
 
-调用方不应自行伪造该 Header；生产入口必须在请求到达应用前完成可信身份校验。
+登录入口：
+
+- `GET /api/auth/github?return_to=/`
+- `GET /api/auth/callback`（GitHub 回调）
+- `GET /api/auth/signout?return_to=/`
+- `GET /api/auth/me`（当前登录用户）
 
 ### Worker 接口
 
@@ -126,8 +131,9 @@ Content-Type: application/json
 
 约束：
 
-- `actor` 只能为 `pi`、`codex` 或 `claude`；
+- `actor` 只能为注册表中的受支持 actor（见 `lib/actors.ts`）；
 - `runtime` 为 `auto`、`herdr` 或 `direct`；
+- `executionStrategy` 为 `sequential` 或 `parallel`（多 Agent 任务）；
 - 多 Agent 必须包含 2–4 个 Step；
 - `title` 最大 200 字符，`prompt` 最大 12000 字符；
 - 仓库必须属于当前 owner。

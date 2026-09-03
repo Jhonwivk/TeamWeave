@@ -6,7 +6,7 @@ TeamWeave 由一个远程控制面和至少一个本地 Worker 组成。控制�
 
 | 部分 | 推荐位置 | 必需能力 |
 | --- | --- | --- |
-| Web + API | Cloudflare Workers 兼容环境 | ChatGPT 身份、D1 Binding |
+| Web + API | Cloudflare Workers 兼容环境 | GitHub OAuth、D1 Binding |
 | D1 | 与控制面同一部署 | Binding 名称 `DB` |
 | Local Worker | 开发者电脑或受控执行机 | Node、Git、至少一个 Agent CLI |
 | Herdr | 与 Local Worker 同机 | 推荐；`auto` 模式可降级 |
@@ -17,7 +17,7 @@ TeamWeave 由一个远程控制面和至少一个本地 Worker 组成。控制�
 - Node.js 22.13 或更高版本；
 - Cloudflare Workers 兼容的 Vinext 构建环境；
 - 名为 `DB` 的 D1 Binding；
-- 浏览器端 ChatGPT 身份注入；
+- GitHub OAuth 应用（`GITHUB_OAUTH_CLIENT_ID`、`GITHUB_OAUTH_CLIENT_SECRET`、`AUTH_SESSION_SECRET`）；
 - Local Worker 能通过 HTTPS 访问 `/api/worker/*`。
 
 本仓库包含 `.openai/hosting.json` 和 D1 迁移。使用 Sites 部署时，平台负责构建与 Binding；在其他 Cloudflare 环境中部署时，需要自行创建 D1 数据库、绑定 `DB`，并执行 `drizzle/` 中的迁移。
@@ -33,6 +33,21 @@ Worker 使用 Bearer Token 调用 API。如果站点入口还有只允许浏览�
 3. 将控制面与 Worker 部署在同一受控网络。
 
 不要为了让 Worker 连通而删除 `requireOwner` 或 `requireWorker` 校验。
+
+### GitHub OAuth
+
+1. 在 GitHub Developer Settings 创建 OAuth App。
+2. Authorization callback URL 设为 `https://YOUR_CONTROL_PLANE/api/auth/callback`。
+3. 配置环境变量：
+
+| 变量 | 用途 |
+| --- | --- |
+| `GITHUB_OAUTH_CLIENT_ID` | OAuth App Client ID |
+| `GITHUB_OAUTH_CLIENT_SECRET` | OAuth App Client Secret |
+| `AUTH_SESSION_SECRET` | 会话 Cookie 签名密钥 |
+| `AUTH_BASE_URL` | 可选，显式指定控制面根 URL |
+
+未配置 OAuth 时，本地开发会回退到固定 owner `dev-local`，便于 `npm run dev` 和测试。
 
 ## 安装本地依赖
 

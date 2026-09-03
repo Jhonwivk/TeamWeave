@@ -37,6 +37,7 @@ export const tasks = sqliteTable("tasks", {
   actor: text("actor").notNull(),
   model: text("model"),
   mode: text("mode").notNull().default("single"),
+  executionStrategy: text("execution_strategy").notNull().default("sequential"),
   runtime: text("runtime").notNull().default("auto"),
   activeSessionId: text("active_session_id"),
   baseBranch: text("base_branch").notNull().default("main"),

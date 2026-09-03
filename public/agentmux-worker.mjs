@@ -8,6 +8,19 @@ const CONTROL_URL = (process.env.AGENTMUX_URL || "").replace(/\/$/, "");
 const TOKEN = process.env.AGENTMUX_TOKEN || "";
 const ROOT = resolve(process.env.AGENTMUX_WORKDIR || join(homedir(), ".agentmux", "workspaces"));
 const HERDR_TIMEOUT = Number(process.env.AGENTMUX_HERDR_TIMEOUT || 30 * 60 * 1000);
+const ACTOR_DETECT = [
+  { id: "pi", cli: "pi" },
+  { id: "codex", cli: "codex" },
+  { id: "claude", cli: "claude" },
+  { id: "cursor", cli: "cursor" },
+  { id: "aider", cli: "aider" },
+  { id: "gemini", cli: "gemini" },
+  { id: "opencode", cli: "opencode" },
+  { id: "goose", cli: "goose" },
+  { id: "amazon_q", cli: "q" },
+  { id: "windsurf", cli: "windsurf" },
+  { id: "copilot", cli: "copilot" },
+];
 
 if (!CONTROL_URL || !TOKEN) {
   console.error("Set AGENTMUX_URL and AGENTMUX_TOKEN before starting the worker.");
@@ -66,7 +79,7 @@ async function has(command) {
 
 async function detectCapabilities() {
   const names = [];
-  for (const name of ["pi", "codex", "claude"]) if (await has(name)) names.push(name);
+  for (const actor of ACTOR_DETECT) if (await has(actor.cli)) names.push(actor.id);
   return names;
 }
 
@@ -122,9 +135,50 @@ function directActorCommand(session, prompt) {
     if (session.model) args.push("--model", String(session.model));
     return { command: "codex", args: [...args, prompt] };
   }
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"];
-  if (session.model) args.push("--model", String(session.model));
-  return { command: "claude", args: [...args, prompt] };
+  if (session.actor === "claude") {
+    const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"];
+    if (session.model) args.push("--model", String(session.model));
+    return { command: "claude", args: [...args, prompt] };
+  }
+  if (session.actor === "cursor") {
+    const args = ["agent", "-p", prompt, "--output-format", "text"];
+    if (session.model) args.splice(1, 0, "--model", String(session.model));
+    return { command: "cursor", args };
+  }
+  if (session.actor === "aider") {
+    const args = ["--message", prompt, "--yes-always", "--no-show-model-warnings"];
+    if (session.model) args.unshift("--model", String(session.model));
+    return { command: "aider", args };
+  }
+  if (session.actor === "gemini") {
+    const args = ["-p", prompt];
+    if (session.model) args.unshift("--model", String(session.model));
+    return { command: "gemini", args };
+  }
+  if (session.actor === "opencode") {
+    const args = ["run", prompt];
+    if (session.model) args.unshift("--model", String(session.model));
+    return { command: "opencode", args };
+  }
+  if (session.actor === "goose") {
+    const args = ["run", "--prompt", prompt];
+    if (session.model) args.push("--model", String(session.model));
+    return { command: "goose", args };
+  }
+  if (session.actor === "amazon_q") {
+    return { command: "q", args: ["chat", "--no-interactive", prompt] };
+  }
+  if (session.actor === "windsurf") {
+    const args = ["-p", prompt];
+    if (session.model) args.unshift("--model", String(session.model));
+    return { command: "windsurf", args };
+  }
+  if (session.actor === "copilot") {
+    const args = ["-p", prompt];
+    if (session.model) args.unshift("--model", String(session.model));
+    return { command: "copilot", args };
+  }
+  throw new Error(`Unsupported actor: ${session.actor}`);
 }
 
 function herdrModelArgs(session) {
@@ -133,7 +187,8 @@ function herdrModelArgs(session) {
   return ["--", "--model", String(session.model)];
 }
 
-function promptFor(job, session, incoming) {
+function promptFor(job, session, incoming, options = {}) {
+  const parallel = options.parallel === true;
   const prior = incoming.length
     ? [
         "",
@@ -151,6 +206,7 @@ function promptFor(job, session, incoming) {
     `Task: ${job.title}`,
     `Your role: ${session.role}`,
     `Stage: ${Number(session.ordinal) + 1} of ${job.sessions.length}`,
+    parallel ? "Execution mode: parallel worktree" : "Execution mode: sequential handoff",
     "",
     job.prompt,
     ...prior,
@@ -158,7 +214,9 @@ function promptFor(job, session, incoming) {
     "Work only inside this repository and current branch. Inspect upstream changes before editing.",
     "Make the smallest coherent change and run relevant checks.",
     "Do not push, merge, create a pull request, or alter git remotes. TeamWeave owns Git delivery.",
-    "At the end, give a concise handoff: decisions, changed files, checks, risks, and what the next agent should do.",
+    parallel
+      ? "You are running in an isolated worktree. Focus on your role and leave branch integration to TeamWeave."
+      : "At the end, give a concise handoff: decisions, changed files, checks, risks, and what the next agent should do.",
   ].join("\n");
 }
 
@@ -189,6 +247,34 @@ async function prepareRepository(job) {
   await run("git", ["config", "user.name", "TeamWeave Worker"], { cwd: repositoryDir });
   await run("git", ["config", "user.email", "teamweave-worker@users.noreply.github.com"], { cwd: repositoryDir });
   return { repositoryDir, branch };
+}
+
+async function prepareSessionWorktree(job, session, repositoryDir, integrationBranch) {
+  const worktreeRoot = join(repositoryDir, ".teamweave-worktrees");
+  await mkdir(worktreeRoot, { recursive: true });
+  const worktreePath = join(worktreeRoot, session.id);
+  const sessionBranch = `${integrationBranch}--sess-${session.ordinal}`;
+  const gitMarker = join(worktreePath, ".git");
+  if (!(await exists(gitMarker))) {
+    const add = await run("git", ["worktree", "add", "-B", sessionBranch, worktreePath, `origin/${job.baseBranch}`], { cwd: repositoryDir });
+    if (add.code !== 0) throw new Error(add.stderr || `Could not create worktree for ${session.role}`);
+  } else {
+    await run("git", ["checkout", sessionBranch], { cwd: worktreePath });
+    const reset = await run("git", ["reset", "--hard", `origin/${job.baseBranch}`], { cwd: worktreePath });
+    if (reset.code !== 0) throw new Error(reset.stderr || `Could not reset worktree for ${session.role}`);
+  }
+  await run("git", ["config", "user.name", "TeamWeave Worker"], { cwd: worktreePath });
+  await run("git", ["config", "user.email", "teamweave-worker@users.noreply.github.com"], { cwd: worktreePath });
+  return { worktreePath, sessionBranch };
+}
+
+async function mergeSessionBranch(repositoryDir, sessionBranch, integrationBranch) {
+  await run("git", ["checkout", integrationBranch], { cwd: repositoryDir });
+  const merge = await run("git", ["merge", "--no-edit", sessionBranch], { cwd: repositoryDir });
+  if (merge.code !== 0) {
+    await run("git", ["merge", "--abort"], { cwd: repositoryDir });
+    throw new Error(`Could not merge parallel session branch ${sessionBranch}: ${(merge.stderr || merge.stdout).slice(-2000)}`);
+  }
 }
 
 function streamReporter(taskId, sessionId) {
@@ -302,9 +388,9 @@ async function markSession(job, session, status, extra = {}) {
   });
 }
 
-async function runDirectSession(job, session, repositoryDir) {
+async function runDirectSession(job, session, repositoryDir, options = {}) {
   const incoming = await incomingMessages(job, session);
-  const prompt = promptFor(job, session, incoming);
+  const prompt = promptFor(job, session, incoming, options);
   await markSession(job, session, "working", { runtime: "direct", runtimeName: `direct:${session.id}` });
   const adapter = directActorCommand(session, prompt);
   const reporter = streamReporter(job.id, session.id);
@@ -461,6 +547,9 @@ async function runHerdrSession(job, session, repositoryDir, workspaceState) {
 }
 
 async function runWorkflow(job) {
+  if (job.executionStrategy === "parallel" && job.sessions.length > 1) {
+    return runWorkflowParallel(job);
+  }
   const heartbeat = setInterval(() => void sendEvent(job.id, { kind: "worker.heartbeat", message: "running" }), 10000);
   try {
     const { repositoryDir, branch } = await prepareRepository(job);
@@ -530,6 +619,54 @@ async function runWorkflow(job) {
       diffStat: diffStats.join("\n") || "No file changes",
       workBranch: branch,
       payload: { compareUrl, runtime, sessionCount: job.sessions.length },
+    });
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
+
+async function runWorkflowParallel(job) {
+  const heartbeat = setInterval(() => void sendEvent(job.id, { kind: "worker.heartbeat", message: "running" }), 10000);
+  try {
+    const { repositoryDir, branch } = await prepareRepository(job);
+    await sendEvent(job.id, {
+      status: "running",
+      activeSessionId: null,
+      kind: "runtime.selected",
+      message: `Parallel direct runtime selected for ${job.sessions.length} sessions`,
+      workBranch: branch,
+      payload: { runtime: "direct", mode: job.executionMode, executionStrategy: "parallel" },
+    });
+
+    const pendingSessions = job.sessions.filter((session) => session.status !== "done");
+    const results = await Promise.all(pendingSessions.map(async (session) => {
+      const { worktreePath, sessionBranch } = await prepareSessionWorktree(job, session, repositoryDir, branch);
+      await markSession(job, session, "working", { runtime: "direct", runtimeName: `parallel:${session.id}` });
+      const result = await runDirectSession(job, session, worktreePath, { parallel: true });
+      return { session, sessionBranch, result };
+    }));
+
+    if (results.some((entry) => entry.result?.blocked)) return;
+
+    for (const session of [...job.sessions].sort((left, right) => left.ordinal - right.ordinal)) {
+      const entry = results.find((item) => item.session.id === session.id);
+      if (entry) await mergeSessionBranch(repositoryDir, entry.sessionBranch, branch);
+    }
+
+    const finalSummary = results.map((entry) => `${entry.session.role}:\n${entry.result.summary || "Completed"}`).join("\n\n");
+    const diffStats = results.map((entry) => `${entry.session.role}: ${entry.result.diffStat || "No file changes"}`);
+    const push = await run("git", ["push", "--force-with-lease", "-u", "origin", branch], { cwd: repositoryDir });
+    if (push.code !== 0) throw new Error(push.stderr || "Could not push isolated branch. Run 'gh auth setup-git' and retry.");
+    const compareUrl = `https://github.com/${job.repository}/compare/${encodeURIComponent(job.baseBranch)}...${encodeURIComponent(branch)}?expand=1`;
+    await sendEvent(job.id, {
+      status: "review",
+      activeSessionId: null,
+      kind: "workflow.completed",
+      message: `${job.sessions.length}-session parallel workflow complete; branch is ready for review`,
+      summary: finalSummary || "All parallel agent sessions completed.",
+      diffStat: diffStats.join("\n") || "No file changes",
+      workBranch: branch,
+      payload: { compareUrl, runtime: "direct", executionStrategy: "parallel", sessionCount: job.sessions.length },
     });
   } finally {
     clearInterval(heartbeat);

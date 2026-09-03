@@ -10,7 +10,7 @@ function createToken() {
 }
 
 export async function POST(request: Request) {
-  const auth = requireOwner(request);
+  const auth = await requireOwner(request);
   if ("error" in auth) return auth.error;
   const payload = await jsonBody<EnrollInput>(request);
   const name = cleanString(payload.name, 100) || "Local Worker";

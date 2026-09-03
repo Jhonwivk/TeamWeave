@@ -6,7 +6,7 @@
 
 ### 浏览器接口
 
-`/api/state`、`/api/repositories`、`/api/tasks` 和 `/api/workers/enroll` 使用部署平台注入的 `oai-authenticated-user-id` 确定 owner。
+`/api/state`、`/api/repositories`、`/api/tasks` 和 `/api/workers/enroll` 使用部署平台注入的 `oai-authenticated-user-id` 确定 owner；如果当前 Sites 入口只转发已验证的 `oai-authenticated-user-email`，控制面会使用带 `email:` 前缀的邮箱作为稳定回退标识。
 
 调用方不应自行伪造该 Header；生产入口必须在请求到达应用前完成可信身份校验。
 

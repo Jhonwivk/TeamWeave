@@ -63,6 +63,7 @@ export default function AgentConsole() {
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [repoOpen, setRepoOpen] = useState(false);
+  const [repoError, setRepoError] = useState<string | null>(null);
   const [workerOpen, setWorkerOpen] = useState(false);
   const [selected, setSelected] = useState<Task | null>(null);
   const [terminalWorkspace, setTerminalWorkspace] = useState<Workspace | null>(null);
@@ -118,11 +119,21 @@ export default function AgentConsole() {
   const availableWorkspaces = state.workspaces.filter((workspace) => workspace.repositoryId === repositoryId && !["stopped", "failed"].includes(workspace.status));
 
   async function addRepository(form: FormData) {
+    const fullName = String(form.get("fullName") || "").trim();
+    if (!/^(?:https?:\/\/github\.com\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(fullName)) {
+      setRepoError("Use owner/repository format, for example Jhonwivk/TeamWeave.");
+      return;
+    }
+    setRepoError(null);
     setBusy(true);
     try {
-      await requestJson("/api/repositories", { method: "POST", body: JSON.stringify({ fullName: form.get("fullName"), defaultBranch: form.get("defaultBranch"), visibility: form.get("visibility") }) });
+      await requestJson("/api/repositories", { method: "POST", body: JSON.stringify({ fullName, defaultBranch: form.get("defaultBranch"), visibility: form.get("visibility") }) });
       setRepoOpen(false); setNotice("GitHub repository connected"); await refresh(true);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not connect repository"); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not connect repository";
+      setRepoError(message);
+      setNotice(message);
+    }
     finally { setBusy(false); }
   }
   async function openWorkspace(repository: Repository) {
@@ -200,7 +211,7 @@ export default function AgentConsole() {
         </Tabs>
       </div>
 
-      <Dialog open={repoOpen} onOpenChange={setRepoOpen}><DialogContent className="border-white/10 bg-[#121622] text-white sm:max-w-lg"><DialogHeader><DialogTitle>Connect GitHub repository</DialogTitle><DialogDescription className="text-white/42">Use owner/repository. Private access is checked by GitHub CLI on your local worker.</DialogDescription></DialogHeader><form action={addRepository} className="space-y-4"><Field label="Repository"><input name="fullName" className="field" placeholder="owner/repository" required autoFocus /></Field><div className="grid gap-4 sm:grid-cols-2"><Field label="Default branch"><input name="defaultBranch" className="field" defaultValue="main" required /></Field><Field label="Visibility"><select name="visibility" className="field"><option value="unknown">Auto / unknown</option><option value="public">Public</option><option value="private">Private</option></select></Field></div><DialogFooter><Button type="button" variant="ghost" onClick={() => setRepoOpen(false)} className="text-white/55 hover:bg-white/8 hover:text-white">Cancel</Button><Button disabled={busy} className="bg-violet-500 text-white hover:bg-violet-400">{busy && <Loader2 className="animate-spin" />}<GitFork /> Connect</Button></DialogFooter></form></DialogContent></Dialog>
+      <Dialog open={repoOpen} onOpenChange={(open) => { setRepoOpen(open); if (!open) setRepoError(null); }}><DialogContent className="border-white/10 bg-[#121622] text-white sm:max-w-lg"><DialogHeader><DialogTitle>Connect GitHub repository</DialogTitle><DialogDescription className="text-white/42">Use owner/repository. Private access is checked by GitHub CLI on your local worker.</DialogDescription></DialogHeader><form action={addRepository} className="space-y-4"><Field label="Repository"><input name="fullName" className="field" placeholder="owner/repository" required autoFocus /></Field>{repoError && <div role="alert" className="rounded-lg border border-rose-400/20 bg-rose-400/8 px-3 py-2 text-xs leading-5 text-rose-100">{repoError}</div>}<div className="grid gap-4 sm:grid-cols-2"><Field label="Default branch"><input name="defaultBranch" className="field" defaultValue="main" required /></Field><Field label="Visibility"><select name="visibility" className="field"><option value="unknown">Auto / unknown</option><option value="public">Public</option><option value="private">Private</option></select></Field></div><DialogFooter><Button type="button" variant="ghost" onClick={() => setRepoOpen(false)} className="text-white/55 hover:bg-white/8 hover:text-white">Cancel</Button><Button type="submit" disabled={busy} className="bg-violet-500 text-white hover:bg-violet-400">{busy && <Loader2 className="animate-spin" />}<GitFork /> Connect</Button></DialogFooter></form></DialogContent></Dialog>
 
       <Dialog open={!!terminalWorkspace} onOpenChange={(open) => !open && setTerminalWorkspace(null)}><DialogContent className="border-white/10 bg-[#0d111a] p-0 text-white sm:max-w-5xl"><div className="p-5"><DialogHeader><DialogTitle>Workspace terminal</DialogTitle><DialogDescription className="text-white/42">Interactive shell on the worker checkout. Commands run on the workspace branch and stay local to your machine.</DialogDescription></DialogHeader>{terminalWorkspace && <WorkspaceTerminal workspace={terminalWorkspace} />}</div></DialogContent></Dialog>
 

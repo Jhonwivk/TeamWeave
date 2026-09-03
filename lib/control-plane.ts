@@ -9,7 +9,13 @@ export function database() {
 }
 
 export function ownerIdFrom(request: Request) {
-  return request.headers.get("oai-authenticated-user-id");
+  // Sites normally injects the stable user id. Some authenticated Site entry
+  // points only forward the verified email header, though, so keep the API
+  // usable there without weakening the trust boundary to client-supplied data.
+  const userId = request.headers.get("oai-authenticated-user-id")?.trim();
+  if (userId) return userId;
+  const email = request.headers.get("oai-authenticated-user-email")?.trim().toLowerCase();
+  return email ? `email:${email}` : null;
 }
 
 export function requireOwner(request: Request) {

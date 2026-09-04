@@ -1,6 +1,6 @@
 # 控制面 API
 
-本文记录当前 MVP 的 HTTP 接口。接口尚未版本化，主要供 TeamWeave Web Console 和官方 Local Worker 使用。
+本文记录 TeamWeave **V0.2.0** 的 HTTP 接口。接口尚未版本化，主要供 TeamWeave Web Console 和官方 Local Worker 使用；后续破坏性变更会在 API 版本化前先更新本文和变更记录。
 
 ## 鉴权
 

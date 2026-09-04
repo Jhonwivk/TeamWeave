@@ -1,6 +1,6 @@
 # TeamWeave 架构
 
-本文描述 TeamWeave 当前 MVP 的运行边界、Development Workspace 生命周期、单 Agent、多 Agent 和跨 Session 通信的实现。
+本文描述 TeamWeave **V0.2.0** 的运行边界、Development Workspace 生命周期、单 Agent、多 Agent 和跨 Session 通信的实现。
 
 ## 系统边界
 

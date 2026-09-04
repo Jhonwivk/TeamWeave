@@ -6,18 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SurfaceHeader } from "@/components/workspace/SurfaceHeader";
+import { WorkspaceFiles } from "@/components/workspace/WorkspaceFiles";
+import { WorkspacePreview } from "@/components/workspace/WorkspacePreview";
 import { ACTOR_CATALOG, type ActorId } from "@/lib/actors";
 import type { AuthUser } from "@/lib/auth";
+import { relative } from "@/lib/format";
+import type { TerminalEvent, TerminalSession, Workspace, WorkspaceEvent, WorkspaceFile, WorkspacePort, WorkspaceProcess } from "@/lib/workspace-types";
 
 type Repository = { id: string; fullName: string; url: string; defaultBranch: string; visibility: string; createdAt: number };
 type Worker = { id: string; name: string; platform: string; capabilities: string[]; runtimes: string[]; lastSeenAt: number | null; createdAt: number };
-type Workspace = { id: string; repositoryId: string; workerId: string | null; localPath: string | null; baseBranch: string; workingBranch: string | null; status: "queued" | "claiming" | "preparing" | "ready" | "stopped" | "failed" | string; error: string | null; createdAt: number; lastActiveAt: number; updatedAt: number; repository?: string; repositoryUrl?: string };
-type WorkspaceEvent = { id: number; workspaceId: string; kind: string; message: string; payload: Record<string, unknown> | null; createdAt: number };
-type WorkspaceProcess = { id: string; ownerId: string; workspaceId: string; workerId: string | null; pid: number; parentPid: number | null; name: string; command: string | null; cwd: string | null; status: string; startedAt: number | null; lastSeenAt: number; updatedAt: number };
-type WorkspacePort = { id: string; ownerId: string; workspaceId: string; workerId: string | null; processId: string | null; pid: number | null; host: string; port: number; protocol: string; label: string | null; url: string | null; status: string; firstSeenAt: number; lastSeenAt: number; updatedAt: number };
-type WorkspaceFile = { id: string; ownerId: string; workspaceId: string; workerId: string | null; path: string; kind: "file" | "directory" | string; size: number; modifiedAt: number | null; status: string; lastSeenAt: number; updatedAt: number };
-type TerminalSession = { id: string; ownerId: string; workspaceId: string; workerId: string | null; shell: string; cwd: string | null; cols: number; rows: number; pid: number | null; status: string; exitCode: number | null; error: string | null; createdAt: number; lastActiveAt: number; updatedAt: number };
-type TerminalEvent = { id: number; ownerId: string; workspaceId: string; terminalId: string; kind: string; data: string | null; payload: Record<string, unknown> | null; createdAt: number };
 type Task = { id: string; repositoryId: string; workspaceId: string | null; title: string; prompt: string; actor: ActorId; model: string | null; mode: "single" | "multi"; runtime: "auto" | "herdr" | "direct"; activeSessionId: string | null; baseBranch: string; workBranch: string | null; status: string; workerId: string | null; attempt: number; summary: string | null; diffStat: string | null; prUrl: string | null; error: string | null; createdAt: number; updatedAt: number };
 type AgentSession = { id: string; taskId: string; actor: ActorId; role: string; model: string | null; ordinal: number; status: string; runtime: string | null; runtimeName: string | null; workspaceId: string | null; paneId: string | null; summary: string | null; createdAt: number; updatedAt: number };
 type SessionMessage = { id: string; taskId: string; fromSessionId: string | null; toSessionId: string | null; kind: string; body: string; artifacts: string[]; gitRef: string | null; status: string; createdAt: number; deliveredAt: number | null; acknowledgedAt: number | null };
@@ -442,66 +440,6 @@ function WorkspaceShell({ workspace, repository, worker, repositories, workspace
   </section>;
 }
 
-function SurfaceHeader({ icon: Icon, title, description }: { icon: typeof Bot; title: string; description: string }) {
-  return <div className="flex items-center gap-3"><div className="grid size-9 place-items-center rounded-lg bg-cyan-400/9 text-cyan-200"><Icon className="size-4" /></div><div><h2 className="text-sm font-semibold">{title}</h2><p className="mt-0.5 text-[11px] text-white/32">{description}</p></div></div>;
-}
-
-function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "—";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
-  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function WorkspaceFiles({ workspace, files }: { workspace: Workspace; files: WorkspaceFile[] }) {
-  const [query, setQuery] = useState("");
-  const presentFiles = useMemo(() => files.filter((file) => file.status === "present"), [files]);
-  const visibleFiles = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return [...presentFiles]
-      .filter((file) => !needle || file.path.toLowerCase().includes(needle))
-      .sort((left, right) => {
-        if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
-        return left.path.localeCompare(right.path);
-      });
-  }, [presentFiles, query]);
-  const directoryCount = presentFiles.filter((file) => file.kind === "directory").length;
-  const fileCount = presentFiles.length - directoryCount;
-  return <>
-    <SurfaceHeader icon={FileText} title="Files" description={presentFiles.length ? `${fileCount} files · ${directoryCount} folders · read-only index` : "Read-only checkout index from the connected worker"} />
-    <div className="mt-5 overflow-hidden rounded-xl border border-white/8">
-      <div className="flex flex-col gap-3 border-b border-white/7 bg-white/[.025] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-white/35"><FolderOpen className="size-3.5 shrink-0" /><span className="truncate">{workspace.localPath || "Checkout path pending"}</span></div>
-        <label className="relative block w-full sm:max-w-52"><Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-white/25" /><input value={query} onChange={(event) => setQuery(event.target.value)} className="h-8 w-full rounded-lg border border-white/8 bg-[#080a11] pl-8 pr-2 text-[11px] text-white outline-none placeholder:text-white/25 focus:border-violet-400/45" placeholder="Filter files" aria-label="Filter workspace files" /></label>
-      </div>
-      {visibleFiles.length ? <div className="max-h-[520px] overflow-y-auto divide-y divide-white/6">{visibleFiles.map((file) => { const isDirectory = file.kind === "directory"; const Icon = isDirectory ? FolderOpen : FileText; return <div key={file.id} className="flex items-center gap-3 px-4 py-3 transition hover:bg-white/[.025]"><div className={`grid size-8 shrink-0 place-items-center rounded-lg ${isDirectory ? "bg-amber-300/10 text-amber-200/70" : "bg-cyan-300/8 text-cyan-200/65"}`}><Icon className="size-4" /></div><div className="min-w-0 flex-1"><div className="truncate font-mono text-xs text-white/72">{file.path}</div><div className="mt-1 text-[10px] text-white/28">{isDirectory ? "Folder" : formatBytes(file.size)}{file.modifiedAt ? ` · ${relative(file.modifiedAt)}` : ""}</div></div><ChevronRight className="size-3.5 shrink-0 text-white/15" /></div>; })}</div> : presentFiles.length ? <div className="grid min-h-56 place-items-center p-8 text-center"><div><Search className="mx-auto size-7 text-white/20" /><h3 className="mt-3 text-sm font-medium">No matching files</h3><p className="mt-2 text-xs text-white/32">Try a different name or clear the filter.</p></div></div> : <div className="grid min-h-72 place-items-center p-8 text-center"><div><FolderOpen className="mx-auto size-8 text-cyan-200/35" /><h3 className="mt-4 text-sm font-medium">{workspace.status === "ready" ? "Waiting for the worker file index" : "File index starts when workspace is ready"}</h3><p className="mx-auto mt-2 max-w-sm text-xs leading-5 text-white/32">The worker reports safe file metadata from this checkout every few seconds. Secrets, dependency folders, and Git internals are never indexed.</p></div></div>}
-      <div className="border-t border-white/7 bg-white/[.018] px-4 py-3 text-[10px] leading-5 text-white/28">Read-only metadata · file contents and write operations stay in Terminal or Agent Runs.</div>
-    </div>
-  </>;
-}
-
-function WorkspacePreview({ processes, ports, onOpenTerminal }: { processes: WorkspaceProcess[]; ports: WorkspacePort[]; onOpenTerminal: () => void }) {
-  const primaryPort = ports[0];
-  const previewUrl = primaryPort ? `${primaryPort.protocol === "https" ? "https" : "http"}://localhost:${primaryPort.port}/` : null;
-  const [previewKey, setPreviewKey] = useState(0);
-  return <>
-    <SurfaceHeader icon={Monitor} title="Preview" description="Local development servers detected by the worker" />
-    <div className="mt-5 grid gap-4 xl:grid-cols-[220px_1fr]">
-      <div className="rounded-xl border border-white/8 bg-white/[.025] p-3">
-        <div className="flex items-center justify-between gap-3"><div className="text-[10px] font-semibold uppercase tracking-[.16em] text-white/25">Processes & ports</div><span className="rounded-full bg-white/6 px-2 py-1 text-[10px] text-white/35">{ports.length} port{ports.length === 1 ? "" : "s"}</span></div>
-        <div className="mt-4 space-y-2">
-          {ports.length ? ports.map((port) => <div key={port.id} className="rounded-lg border border-emerald-300/12 bg-emerald-300/[.035] p-3"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,.65)]" /><span className="min-w-0 truncate text-xs font-medium text-white/75">{port.label || "Development server"}</span></div><div className="mt-1.5 flex items-center justify-between gap-2 font-mono text-[10px] text-emerald-100/55"><span>localhost:{port.port}</span><span className="uppercase text-white/25">{port.protocol}</span></div></div>) : <div className="rounded-lg border border-dashed border-white/8 p-4 text-center"><span className="mx-auto block size-2 rounded-full bg-white/20" /><div className="mt-2 text-xs text-white/45">No listening ports detected</div><div className="mt-1 text-[10px] leading-4 text-white/25">Run a dev server in Terminal; the worker checks every few seconds.</div></div>}
-        </div>
-        <div className="mt-4 border-t border-white/7 pt-3"><div className="text-[10px] font-semibold uppercase tracking-[.16em] text-white/25">Processes</div>{processes.length ? <div className="mt-2 space-y-1.5">{processes.slice(0, 6).map((process) => <div key={process.id} className="flex items-center justify-between gap-2 text-[11px]"><span className="min-w-0 truncate text-white/55">{process.name}</span><span className="shrink-0 font-mono text-[10px] text-white/25">#{process.pid}</span></div>)}</div> : <div className="mt-2 text-[11px] leading-5 text-white/28">No workspace processes reported yet.</div>}</div>
-      </div>
-      <div className="min-h-96 rounded-xl border border-white/8 bg-[#06080d] p-3 sm:p-4">
-        {primaryPort && previewUrl ? <div className="flex h-full min-h-[420px] flex-col"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 px-1 pb-3"><div className="min-w-0"><div className="flex items-center gap-2 text-xs font-medium text-white/75"><span className="size-2 rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,.65)]" />{primaryPort.label || "Development server"}</div><div className="mt-1 truncate font-mono text-[10px] text-white/32">{previewUrl}</div></div><div className="flex shrink-0 items-center gap-2"><button type="button" onClick={() => setPreviewKey((value) => value + 1)} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 text-[11px] text-white/55 hover:bg-white/8 hover:text-white"><RefreshCw className="size-3.5" />Refresh</button><a href={previewUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 text-[11px] text-white/55 hover:bg-white/8 hover:text-white">Open <ExternalLink className="size-3.5" /></a></div></div><div className="relative mt-3 min-h-0 flex-1 overflow-hidden rounded-lg border border-white/8 bg-white"><iframe key={`${previewUrl}-${previewKey}`} title={`${primaryPort.label || "Development server"} preview`} src={previewUrl} className="h-full min-h-[360px] w-full border-0" loading="eager" referrerPolicy="no-referrer" /></div><div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-3 text-[10px] text-white/30"><span className="inline-flex items-center gap-1.5"><Wifi className="size-3" />Preview runs on the connected worker machine.</span><button type="button" onClick={onOpenTerminal} className="text-violet-300 hover:text-violet-200">Open Terminal →</button></div></div> : <div className="grid min-h-96 place-items-center p-8 text-center"><div><Monitor className="mx-auto size-9 text-white/18" /><h3 className="mt-4 text-sm font-medium">Preview is waiting for a detected port</h3><p className="mx-auto mt-2 max-w-sm text-xs leading-5 text-white/32">Start your app locally. The worker discovers listeners inside this workspace and will report them here.</p><Button variant="outline" onClick={onOpenTerminal} className="mt-4 border-white/10 bg-transparent text-white hover:bg-white/8"><TerminalSquare />Open Terminal</Button></div></div>}
-      </div>
-    </div>
-  </>;
-}
-
 function WorkspaceTerminal({ workspace }: { workspace: Workspace }) {
   const [terminal, setTerminal] = useState<TerminalSession | null>(null);
   const [events, setEvents] = useState<TerminalEvent[]>([]);
@@ -583,4 +521,3 @@ function WorkspaceTerminal({ workspace }: { workspace: Workspace }) {
   const terminalState = terminal?.status || "connecting";
   return <div className="mt-5 space-y-3"><div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/8 bg-[#090c13] px-4 py-3"><div className="flex min-w-0 items-center gap-3"><div className={`size-2 rounded-full ${terminalState === "running" ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,.7)]" : terminalState === "failed" ? "bg-rose-300" : "bg-amber-300"}`} /><div className="min-w-0"><div className="flex items-center gap-2 text-sm font-medium"><span>{terminal?.shell || "shell"}</span><span className={`status status-${terminalState}`}>{terminalState}</span></div><div className="mt-1 truncate font-mono text-[11px] text-white/32">{workspace.localPath || terminal?.cwd || "Waiting for workspace path"} · {workspace.workingBranch || "branch"}</div></div></div><Button variant="outline" disabled={busy || !terminal || ["stopped", "exited"].includes(terminal.status)} onClick={() => void stopTerminal()} className="h-8 border-rose-400/20 bg-transparent text-rose-200 hover:bg-rose-400/10"><XCircle className="size-3.5" />Stop</Button></div><div className="overflow-hidden rounded-xl border border-white/8 bg-[#05070b] shadow-inner"><div className="flex items-center justify-between border-b border-white/6 px-4 py-2 text-[11px] text-white/30"><span className="font-mono">~/workspace</span><span>{events.length} events</span></div><div className="scrollbar-thin h-[360px] overflow-y-auto p-4 font-mono text-xs leading-5 text-cyan-100/75">{events.length ? events.map((event) => <div key={event.id} className={event.kind === "terminal.input" ? "text-violet-200" : event.kind.includes("failed") ? "text-rose-200" : "whitespace-pre-wrap"}>{event.kind === "terminal.input" ? `$ ${event.data || ""}` : event.data || `[${event.kind}]`}</div>) : <div className="text-white/30">{error || "Connecting to the local worker…"}</div>}</div><form onSubmit={(event) => { event.preventDefault(); void sendInput(`${line}\n`); }} className="flex items-center gap-2 border-t border-white/6 px-4 py-3"><span className="font-mono text-xs text-emerald-300">$</span><input value={line} onChange={(event) => setLine(event.target.value)} onKeyDown={(event) => { if (event.ctrlKey && event.key.toLowerCase() === "c") { event.preventDefault(); void sendInput("\u0003"); } }} disabled={busy || terminalState !== "running"} className="min-w-0 flex-1 bg-transparent font-mono text-xs text-white outline-none placeholder:text-white/25" placeholder={terminalState === "running" ? "npm install · git status · npm run dev" : "Waiting for shell…"} aria-label="Terminal command" autoFocus /></form></div>{error && <div className="rounded-lg border border-rose-400/15 bg-rose-400/6 px-3 py-2 text-xs leading-5 text-rose-100/70">{error}</div>}<div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] text-white/32"><span>Commands execute on the local worker</span><span>Ctrl+C sends an interrupt</span><span>Terminal stays alive when this window closes</span></div></div>;
 }
-function relative(timestamp: number) { const seconds = Math.max(1, Math.round((Date.now() - timestamp) / 1000)); if (seconds < 60) return `${seconds}s ago`; if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`; return new Date(timestamp).toLocaleDateString(); }

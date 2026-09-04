@@ -4,7 +4,7 @@ TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把�
 
 它不是聊天界面，也不把多个模型简单放进同一个群聊。控制面保存任务、Session、handoff、执行事件与人工决策；本地 Worker 负责调用真实 Agent、管理 Git 分支，并在批准后创建 Pull Request。
 
-> 当前状态：V0.2 / TW-26 Workspace Shell UI 已完成第一版，并已升级为面向商用产品的控制台壳层。除原有 Agent 控制面外，支持持久化 Development Workspace、本地 Worker 生命周期、隔离分支、可恢复的 clone/reuse、浏览器 Terminal、安全的只读 Files 索引，以及把 Collaboration、Files、Git、Preview、Terminal、Agent Runs 收进同一工作区界面。控制台提供 Overview、Repositories、Workspaces、Workers、Activity 持久导航、Worker fleet 健康状态和按当前状态给出的 Next action。
+> 当前状态：**V0.2.0 已发布（2026-09-04）**。TW-21 → TW-26 的 Development Workspace 闭环已完成，并升级为面向商用产品的控制台壳层。除原有 Agent 控制面外，支持持久化 Development Workspace、本地 Worker 生命周期、隔离分支、可恢复的 clone/reuse、浏览器 Terminal、安全的只读 Files 索引，以及把 Collaboration、Files、Git、Preview、Terminal、Agent Runs 收进同一工作区界面。控制台提供 Overview、Repositories、Workspaces、Workers、Activity 持久导航、Worker fleet 健康状态和按当前状态给出的 Next action。
 
 ## 核心能力
 
@@ -127,6 +127,9 @@ Herdr 由本机用户启动，Agent 会继承 Herdr Server 的本地环境。生
 - [系统架构](docs/ARCHITECTURE.md)
 - [部署与 Worker 配置](docs/DEPLOYMENT.md)
 - [控制面 API](docs/API.md)
+- [V0.2.0 代码审查](docs/CODE_REVIEW.md)
+- [V0.2.0 开发计划](docs/DEVELOPMENT_PLAN.md)
+- [变更记录](CHANGELOG.md)
 
 ## 当前限制
 
@@ -134,7 +137,7 @@ Herdr 由本机用户启动，Agent 会继承 Herdr Server 的本地环境。生
 - Workflow 是显式 Session Pipeline，不包含自动规划任意 DAG。
 - 私有 Sites 入口可能在请求到达 Worker API 前拦截本地进程；真实远程 Worker 需要公开入口加应用层认证，或等价的可信网络通道。
 - 自动合并、组织级权限、预算策略和跨仓库事务尚未实现。
-- Worker 进程/端口发现、只读 Files 索引与 localhost 内嵌 Preview 已在 TW-24/TW-25 及后续版本实现；公网隧道、分享链接、文件内容编辑和自动部署仍未开放。
+- Worker 进程/端口发现、只读 Files 索引与 localhost 内嵌 Preview 已在 V0.2.0 实现；公网隧道、分享链接、文件内容编辑和自动部署仍未开放。
 
 ## 项目结构
 

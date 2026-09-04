@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("ships the TeamWeave console, Herdr runtime, and cross-session protocol", async () => {
-  const [consoleSource, workerSource, actorSource, schemaSource, pollSource, workspaceRoute, terminalRoute, workerTerminalRoute, processesRoute, migration, workspaceMigration, terminalMigration, processesMigration, filesMigration] = await Promise.all([
+  const [consoleSource, workerSource, actorSource, schemaSource, pollSource, workspaceRoute, terminalRoute, workerTerminalRoute, processesRoute, migration, workspaceMigration, terminalMigration, processesMigration, filesMigration, workspaceFilesSource, workspacePreviewSource, workspaceTypesSource, formatSource] = await Promise.all([
     readFile(new URL("../app/console.tsx", import.meta.url), "utf8"),
     readFile(new URL("../public/agentmux-worker.mjs", import.meta.url), "utf8"),
     readFile(new URL("../lib/actors.ts", import.meta.url), "utf8"),
@@ -18,6 +18,10 @@ test("ships the TeamWeave console, Herdr runtime, and cross-session protocol", a
     readFile(new URL("../drizzle/0003_married_mysterio.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0004_open_jazinda.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0005_clear_the_hood.sql", import.meta.url), "utf8"),
+    readFile(new URL("../components/workspace/WorkspaceFiles.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/workspace/WorkspacePreview.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/workspace-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/format.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(consoleSource, /TeamWeave/);
@@ -34,15 +38,15 @@ test("ships the TeamWeave console, Herdr runtime, and cross-session protocol", a
   assert.match(consoleSource, /Overview/);
   assert.match(consoleSource, /Collaboration/);
   assert.match(consoleSource, /Agent Runs/);
-  assert.match(consoleSource, /Processes & ports/);
   assert.match(consoleSource, /WorkspacePreview/);
   assert.match(consoleSource, /WorkspaceFiles/);
-  assert.match(consoleSource, /No matching files/);
-  assert.match(consoleSource, /read-only index/);
-  assert.match(consoleSource, /No listening ports detected/);
-  assert.match(consoleSource, /iframe/);
-  assert.match(consoleSource, /localhost:\$\{primaryPort\.port\}/);
-  assert.match(consoleSource, /Preview runs on the connected worker machine/);
+  assert.match(workspacePreviewSource, /Processes & ports/);
+  assert.match(workspaceFilesSource, /No matching files/);
+  assert.match(workspaceFilesSource, /read-only index/);
+  assert.match(workspacePreviewSource, /No listening ports detected/);
+  assert.match(workspacePreviewSource, /iframe/);
+  assert.match(workspacePreviewSource, /localhost:\$\{primaryPort\.port\}/);
+  assert.match(workspacePreviewSource, /Preview runs on the connected worker machine/);
   assert.match(consoleSource, /Start agent task/);
   assert.match(actorSource, /name: "Gemini CLI"/);
   assert.match(actorSource, /name: "GitHub Copilot"/);
@@ -92,4 +96,10 @@ test("ships the TeamWeave console, Herdr runtime, and cross-session protocol", a
   assert.match(processesMigration, /CREATE TABLE `workspace_processes`/);
   assert.match(processesMigration, /CREATE TABLE `workspace_ports`/);
   assert.match(filesMigration, /CREATE TABLE `workspace_files`/);
+  assert.match(workspaceFilesSource, /read-only index/);
+  assert.match(workspaceFilesSource, /Filter workspace files/);
+  assert.match(workspacePreviewSource, /iframe/);
+  assert.match(workspacePreviewSource, /localhost/);
+  assert.match(workspaceTypesSource, /export type WorkspaceFile/);
+  assert.match(formatSource, /export function formatBytes/);
 });

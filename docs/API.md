@@ -51,7 +51,7 @@ Content-Type: application/json
 
 `capabilities`、`runtimes`、`payload` 和 `artifacts` 已解析为 JSON 值。
 
-`processes` 和 `ports` 是当前 owner 工作区的最近运行时快照；控制台只展示 `running` / `listening` 记录。命令行已在 Worker 端做长度限制和常见凭据脱敏，端口 URL 仅用于后续私有预览代理，不代表浏览器当前可以直接访问 Worker 的 localhost。
+`processes` 和 `ports` 是当前 owner 工作区的最近运行时快照；控制台只展示 `running` / `listening` 记录。命令行已在 Worker 端做长度限制和常见凭据脱敏，端口 URL 只允许生成 `http(s)://localhost:<port>`，供连接 Worker 的同一台机器以内嵌 Preview 加载。
 
 ### POST /api/repositories
 

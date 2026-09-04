@@ -133,7 +133,7 @@ Herdr 由本机用户启动，Agent 会继承 Herdr Server 的本地环境。生
 - Workflow 是显式 Session Pipeline，不包含自动规划任意 DAG。
 - 私有 Sites 入口可能在请求到达 Worker API 前拦截本地进程；真实远程 Worker 需要公开入口加应用层认证，或等价的可信网络通道。
 - 自动合并、组织级权限、预算策略和跨仓库事务尚未实现。
-- Worker 进程/端口发现已在 TW-24 实现；内嵌 Preview（把本地端口安全代理到浏览器）仍在 TW-25。
+- Worker 进程/端口发现与 localhost 内嵌 Preview 已在 TW-24/TW-25 实现；公网隧道、分享链接和自动部署仍未开放。
 
 ## 项目结构
 

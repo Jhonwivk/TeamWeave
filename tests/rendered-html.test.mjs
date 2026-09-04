@@ -36,6 +36,9 @@ test("ships the TeamWeave console, Herdr runtime, and cross-session protocol", a
   assert.match(consoleSource, /Processes & ports/);
   assert.match(consoleSource, /WorkspacePreview/);
   assert.match(consoleSource, /No listening ports detected/);
+  assert.match(consoleSource, /iframe/);
+  assert.match(consoleSource, /localhost:\$\{primaryPort\.port\}/);
+  assert.match(consoleSource, /Preview runs on the connected worker machine/);
   assert.match(consoleSource, /Start agent task/);
   assert.match(actorSource, /name: "Gemini CLI"/);
   assert.match(actorSource, /name: "GitHub Copilot"/);

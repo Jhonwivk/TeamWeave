@@ -66,7 +66,7 @@ Worker 在本机启动交互 Shell，维护 `terminalId → child process` 映�
 
 Workspace Shell 是 Development Workspace 的统一产品表面，不创建第二套 Task、Agent Session 或事件模型。左侧只负责在现有 Workspace 间导航；中间 Collaboration 面板按 `workspaceId` 聚合 Task、Session 和需要人工处理的状态；右侧 Files、Git、Preview、Terminal、Agent Runs 共享同一 Workspace 上下文。
 
-Terminal 直接复用现有持久化 Terminal API，Agent Runs 直接读取 `agent_sessions`，Git 与人工审核仍进入原有 Task Detail/PR gate。Worker 每 5 秒扫描 READY checkout 的本地进程和 TCP 监听端口，将经过脱敏的快照写入 `workspace_processes` / `workspace_ports`；控制台 Preview 面板展示真实检测结果，并在无结果时保持明确空状态。Files 文件索引和 TW-25 的私有内嵌 Preview 代理仍未开放，界面不会伪造本地文件或把 Worker 的 localhost 暴露到公网。
+Terminal 直接复用现有持久化 Terminal API，Agent Runs 直接读取 `agent_sessions`，Git 与人工审核仍进入原有 Task Detail/PR gate。Worker 每 5 秒扫描 READY checkout 的本地进程和 TCP 监听端口，将经过脱敏的快照写入 `workspace_processes` / `workspace_ports`；控制台 Preview 面板展示真实检测结果，并在有监听端口时以内嵌 iframe 加载经过校验的 `http(s)://localhost:<port>`。该入口只对连接 Worker 所在的同一台机器有效；Files 文件索引、公网隧道、分享链接和自动部署仍未开放，界面不会把 Worker 的 localhost 暴露到公网。
 
 ### Workspace process and port discovery
 

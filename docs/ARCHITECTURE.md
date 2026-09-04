@@ -27,12 +27,26 @@ erDiagram
     WORKER ||--o{ DEVELOPMENT_WORKSPACE : prepares
     DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_EVENT : records
     DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_TERMINAL : exposes
+    DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_PROCESS : observes
+    DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_PORT : observes
     WORKSPACE_TERMINAL ||--o{ TERMINAL_COMMAND : queues
     WORKSPACE_TERMINAL ||--o{ TERMINAL_EVENT : records
     DEVELOPMENT_WORKSPACE o|--o{ TASK : hosts
     AGENT_SESSION o|--o{ SESSION_MESSAGE : sends
     AGENT_SESSION o|--o{ SESSION_MESSAGE : receives
+    WORKSPACE_PROCESS {
+      string id
+      int pid
+      string status
+    }
+    WORKSPACE_PORT {
+      string id
+      int port
+      string status
+    }
 ```
+
+`WORKSPACE_PROCESS` 保存 Worker 在 checkout 内观察到的进程元数据；`WORKSPACE_PORT` 保存与进程关联的本地 TCP 监听端口。两者都是可过期的观测记录，不是控制面启动或管理进程的句柄。
 
 ### Development Workspace
 
@@ -52,7 +66,11 @@ Worker 在本机启动交互 Shell，维护 `terminalId → child process` 映�
 
 Workspace Shell 是 Development Workspace 的统一产品表面，不创建第二套 Task、Agent Session 或事件模型。左侧只负责在现有 Workspace 间导航；中间 Collaboration 面板按 `workspaceId` 聚合 Task、Session 和需要人工处理的状态；右侧 Files、Git、Preview、Terminal、Agent Runs 共享同一 Workspace 上下文。
 
-Terminal 直接复用现有持久化 Terminal API，Agent Runs 直接读取 `agent_sessions`，Git 与人工审核仍进入原有 Task Detail/PR gate。Files 与 Preview 先提供明确的能力边界和空状态，等待后续 Worker 文件索引及 TW-24/TW-25 进程、端口与私有预览数据接入；界面不会伪造本地文件或端口。
+Terminal 直接复用现有持久化 Terminal API，Agent Runs 直接读取 `agent_sessions`，Git 与人工审核仍进入原有 Task Detail/PR gate。Worker 每 5 秒扫描 READY checkout 的本地进程和 TCP 监听端口，将经过脱敏的快照写入 `workspace_processes` / `workspace_ports`；控制台 Preview 面板展示真实检测结果，并在无结果时保持明确空状态。Files 文件索引和 TW-25 的私有内嵌 Preview 代理仍未开放，界面不会伪造本地文件或把 Worker 的 localhost 暴露到公网。
+
+### Workspace process and port discovery
+
+Worker 只为自己绑定的 READY Workspace 上报快照。进程的工作目录必须位于该 Workspace checkout 内；命令行经过长度限制和常见 token/secret/password/api-key 脱敏后才会离开本机。控制面按 owner、worker 和 workspace 校验数据，先把上一轮 `running` / `listening` 记录标记为 `stale`，再幂等写入当前快照。端口只保存本地预览所需的协议、监听地址、端口、关联 PID 和显示标签，不读取或上传应用内容。
 
 ### Task
 

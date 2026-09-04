@@ -37,6 +37,8 @@ Content-Type: application/json
   "messages": [],
   "workspaces": [],
   "workspaceEvents": [],
+  "processes": [],
+  "ports": [],
   "serverTime": 1788316800000
 }
 ```
@@ -48,6 +50,8 @@ Content-Type: application/json
 - 最多 500 条 Session Message。
 
 `capabilities`、`runtimes`、`payload` 和 `artifacts` 已解析为 JSON 值。
+
+`processes` 和 `ports` 是当前 owner 工作区的最近运行时快照；控制台只展示 `running` / `listening` 记录。命令行已在 Worker 端做长度限制和常见凭据脱敏，端口 URL 仅用于后续私有预览代理，不代表浏览器当前可以直接访问 Worker 的 localhost。
 
 ### POST /api/repositories
 
@@ -194,6 +198,28 @@ Action 与当前状态不匹配时返回 `409`。
 ```
 
 `token` 是唯一一次返回的原始凭据。
+
+### POST /api/worker/processes
+
+Worker 每隔几秒上报 READY 工作区的本地进程和 TCP 监听端口。此接口只接受绑定 Worker 自己的工作区，并要求进程 `cwd` 位于该工作区 checkout 内；控制面会将上一轮未出现的记录标为 `stale`，再按工作区/PID 和工作区/协议/端口幂等更新。
+
+```json
+{
+  "snapshots": [
+    {
+      "workspaceId": "ws_...",
+      "processes": [
+        { "pid": 4812, "parentPid": 4700, "name": "node", "command": "next dev", "cwd": "/Users/me/.agentmux/workspaces/ws_..." }
+      ],
+      "ports": [
+        { "pid": 4812, "host": "127.0.0.1", "port": 3000, "protocol": "http", "label": "Next.js development server" }
+      ]
+    }
+  ]
+}
+```
+
+成功返回当前 Worker 仍处于 READY 的工作区列表和 `reportedAt`。Worker 不上传源码、请求内容或 Git 凭据。
 
 ### GET /api/workspaces
 

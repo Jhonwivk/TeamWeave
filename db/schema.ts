@@ -110,6 +110,48 @@ export const workspaceTerminalEvents = sqliteTable("workspace_terminal_events", 
   index("idx_workspace_terminal_events_terminal_created").on(table.terminalId, table.createdAt),
 ]);
 
+export const workspaceProcesses = sqliteTable("workspace_processes", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  workerId: text("worker_id").references(() => workers.id),
+  pid: integer("pid").notNull(),
+  parentPid: integer("parent_pid"),
+  name: text("name").notNull(),
+  command: text("command"),
+  cwd: text("cwd"),
+  status: text("status").notNull().default("running"),
+  startedAt: integer("started_at"),
+  lastSeenAt: integer("last_seen_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_workspace_processes_workspace_pid").on(table.workspaceId, table.pid),
+  index("idx_workspace_processes_owner_workspace_status").on(table.ownerId, table.workspaceId, table.status),
+  index("idx_workspace_processes_worker_last_seen").on(table.workerId, table.lastSeenAt),
+]);
+
+export const workspacePorts = sqliteTable("workspace_ports", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  workerId: text("worker_id").references(() => workers.id),
+  processId: text("process_id"),
+  pid: integer("pid"),
+  host: text("host").notNull().default("127.0.0.1"),
+  port: integer("port").notNull(),
+  protocol: text("protocol").notNull().default("http"),
+  label: text("label"),
+  url: text("url"),
+  status: text("status").notNull().default("listening"),
+  firstSeenAt: integer("first_seen_at").notNull(),
+  lastSeenAt: integer("last_seen_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_workspace_ports_workspace_protocol_port").on(table.workspaceId, table.protocol, table.port),
+  index("idx_workspace_ports_owner_workspace_status").on(table.ownerId, table.workspaceId, table.status),
+  index("idx_workspace_ports_worker_last_seen").on(table.workerId, table.lastSeenAt),
+]);
+
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull(),

@@ -40,6 +40,8 @@ if (!CONTROL_URL || !TOKEN) {
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const terminalProcesses = new Map();
+const monitoredWorkspaces = new Map();
+let processMonitorBusy = false;
 
 async function api(path, body) {
   const response = await fetch(`${CONTROL_URL}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
@@ -77,6 +79,14 @@ function run(command, args, options = {}) {
     child.on("error", rejectRun);
     child.on("close", (code) => resolveRun({ code: code ?? 1, stdout, stderr }));
   });
+}
+
+async function runBestEffort(command, args, options = {}) {
+  try {
+    return await run(command, args, options);
+  } catch (error) {
+    return { code: 127, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function has(command) {
@@ -145,6 +155,133 @@ async function sendTerminalEvent(terminalId, event) {
     await api("/api/worker/terminal", { terminalId, ...event });
   } catch (error) {
     console.error("Could not send terminal event:", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function pathWithin(child, root) {
+  if (!child || !root) return false;
+  const normalizedChild = resolve(String(child));
+  const normalizedRoot = resolve(String(root));
+  return normalizedChild === normalizedRoot || normalizedChild.startsWith(`${normalizedRoot}/`);
+}
+
+function redactCommand(value) {
+  return String(value || "")
+    .replace(/((?:token|secret|password|api[_-]?key)\s*[=:]\s*)[^\s]+/gi, "$1REDACTED")
+    .slice(0, 1200);
+}
+
+function parseLsofRecords(output) {
+  const records = [];
+  let record = null;
+  for (const line of String(output || "").split("\n")) {
+    if (!line) continue;
+    const field = line[0];
+    const value = line.slice(1);
+    if (field === "p") {
+      if (record) records.push(record);
+      record = { pid: Number(value) };
+    } else if (record && field === "c") {
+      record.name = value;
+    } else if (record && field === "n") {
+      record.nameOrPath = value;
+    }
+  }
+  if (record) records.push(record);
+  return records.filter((item) => Number.isInteger(item.pid) && item.pid > 0);
+}
+
+async function discoverUnixProcesses(cwd) {
+  const result = await runBestEffort("lsof", ["-a", "-d", "cwd", "-Fpcn"]);
+  if (result.code !== 0) return [];
+  const processes = [];
+  for (const row of parseLsofRecords(result.stdout)) {
+    if (!pathWithin(row.nameOrPath, cwd)) continue;
+    const details = await runBestEffort("ps", ["-p", String(row.pid), "-o", "ppid=,command="]);
+    const match = details.stdout.trim().match(/^\s*(\d+)\s+(.*)$/s);
+    processes.push({
+      pid: row.pid,
+      parentPid: match ? Number(match[1]) : null,
+      name: String(row.name || "process").slice(0, 160),
+      command: redactCommand(match?.[2] || row.name || "process"),
+      cwd,
+    });
+  }
+  return processes.slice(0, 100);
+}
+
+function parseListenAddress(value) {
+  const text = String(value || "").trim().replace(/^TCP\s+/i, "").replace(/\s+\(LISTEN\)\s*$/i, "").replace(/\s+->.*$/, "");
+  const match = text.match(/^(.*):(\d+)$/);
+  if (!match) return null;
+  let host = match[1];
+  if (host.startsWith("[")) host = host.slice(1, -1);
+  if (host === "*" || host === "0.0.0.0" || host === "::") host = "127.0.0.1";
+  return { host, port: Number(match[2]) };
+}
+
+function labelForProcess(processInfo) {
+  const text = `${processInfo?.name || ""} ${processInfo?.command || ""}`.toLowerCase();
+  if (text.includes("next")) return "Next.js development server";
+  if (text.includes("vite")) return "Vite development server";
+  if (text.includes("webpack")) return "Webpack development server";
+  if (text.includes("python") || text.includes("uvicorn")) return "Python development server";
+  return `${processInfo?.name || "Development"} server`;
+}
+
+async function discoverUnixPorts(processes) {
+  const processIds = new Set(processes.map((item) => item.pid));
+  if (!processIds.size) return [];
+  let result = await runBestEffort("lsof", ["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]);
+  if (result.code === 0) {
+    return parseLsofRecords(result.stdout).map((row) => {
+      const address = parseListenAddress(row.nameOrPath);
+      if (!address || !processIds.has(row.pid)) return null;
+      const processInfo = processes.find((item) => item.pid === row.pid);
+      return { pid: row.pid, host: address.host, port: address.port, protocol: address.port === 443 ? "https" : "http", label: labelForProcess(processInfo) };
+    }).filter(Boolean).slice(0, 100);
+  }
+  result = await runBestEffort("ss", ["-ltnpH"]);
+  if (result.code !== 0) return [];
+  return String(result.stdout || "").split("\n").map((line) => {
+    const address = parseListenAddress(line.trim().split(/\s+/)[3]);
+    const pid = Number(line.match(/pid=(\d+)/)?.[1] || 0);
+    if (!address || !processIds.has(pid)) return null;
+    const processInfo = processes.find((item) => item.pid === pid);
+    return { pid, host: address.host, port: address.port, protocol: address.port === 443 ? "https" : "http", label: labelForProcess(processInfo) };
+  }).filter(Boolean).slice(0, 100);
+}
+
+async function discoverWorkspaceRuntime(workspace) {
+  const cwd = workspaceDirectory(workspace);
+  if (!(await exists(cwd)) || process.platform === "win32") return { workspaceId: workspace.id, processes: [], ports: [] };
+  const processes = await discoverUnixProcesses(cwd);
+  const ports = await discoverUnixPorts(processes);
+  return { workspaceId: workspace.id, processes, ports };
+}
+
+function rememberMonitoredWorkspaces(workspaces) {
+  if (!Array.isArray(workspaces)) return;
+  monitoredWorkspaces.clear();
+  for (const workspace of workspaces) {
+    if (workspace?.id && workspace.status === "ready" && workspace.localPath) monitoredWorkspaces.set(String(workspace.id), workspace);
+  }
+}
+
+async function monitorWorkspaceRuntime() {
+  if (processMonitorBusy) return;
+  processMonitorBusy = true;
+  try {
+    const snapshots = [];
+    for (const workspace of monitoredWorkspaces.values()) {
+      snapshots.push(await discoverWorkspaceRuntime(workspace));
+    }
+    const response = await api("/api/worker/processes", { snapshots });
+    rememberMonitoredWorkspaces(response.workspaces);
+  } catch (error) {
+    console.error("Could not monitor workspace processes:", error instanceof Error ? error.message : String(error));
+  } finally {
+    processMonitorBusy = false;
   }
 }
 
@@ -481,6 +618,7 @@ async function runWorkspaceJob(job) {
   });
   try {
     const prepared = await prepareWorkspace(workspace);
+    monitoredWorkspaces.set(String(workspace.id), { ...workspace, status: "ready", localPath: prepared.repositoryDir, workingBranch: prepared.branch });
     await sendWorkspaceEvent(workspace.id, {
       kind: "workspace.ready",
       message: "Workspace is ready for agents and future terminal sessions",
@@ -770,6 +908,7 @@ async function runWorkflow(job) {
   const heartbeat = setInterval(() => void sendEvent(job.id, { kind: "worker.heartbeat", message: "running" }), 10000);
   try {
     const { repositoryDir, branch } = await prepareRepository(job);
+    if (job.workspace?.id) monitoredWorkspaces.set(String(job.workspace.id), { ...job.workspace, status: "ready", localPath: repositoryDir, workingBranch: branch });
     const installedRuntimes = await detectRuntimes();
     const pendingSessions = job.sessions.filter((session) => session.status !== "done");
     const plannedRuntimes = pendingSessions.map((session) => selectRuntime(job, session, installedRuntimes));
@@ -873,6 +1012,8 @@ let detectedRuntimes = await detectRuntimes();
 console.log(`Detected actors: ${detectedActors.join(", ") || "none"}`);
 console.log(`Detected runtimes: ${detectedRuntimes.join(", ")}`);
 if (!detectedActors.length) console.log("Install and authenticate a supported coding agent, then restart.");
+void monitorWorkspaceRuntime();
+setInterval(() => void monitorWorkspaceRuntime(), 5000);
 
 while (true) {
   try {

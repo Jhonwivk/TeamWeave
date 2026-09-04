@@ -4,7 +4,7 @@ TeamWeave 是一个面向真实 Coding Agent 的本地优先控制面。它把�
 
 它不是聊天界面，也不把多个模型简单放进同一个群聊。控制面保存任务、Session、handoff、执行事件与人工决策；本地 Worker 负责调用真实 Agent、管理 Git 分支，并在批准后创建 Pull Request。
 
-> 当前状态：V0.2 / TW-26 Workspace Shell UI 已完成第一版。除原有 Agent 控制面外，支持持久化 Development Workspace、本地 Worker 生命周期、隔离分支、可恢复的 clone/reuse、浏览器 Terminal，以及把 Collaboration、Files、Git、Preview、Terminal、Agent Runs 收进同一工作区界面。
+> 当前状态：V0.2 / TW-26 Workspace Shell UI 已完成第一版，并已升级为面向商用产品的控制台壳层。除原有 Agent 控制面外，支持持久化 Development Workspace、本地 Worker 生命周期、隔离分支、可恢复的 clone/reuse、浏览器 Terminal，以及把 Collaboration、Files、Git、Preview、Terminal、Agent Runs 收进同一工作区界面。控制台提供 Overview、Repositories、Workspaces、Workers、Activity 持久导航、Worker fleet 健康状态和按当前状态给出的 Next action。
 
 ## 核心能力
 

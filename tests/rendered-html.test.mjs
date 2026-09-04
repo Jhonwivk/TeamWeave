@@ -25,6 +25,10 @@ test("ships the TeamWeave console, Herdr runtime, and cross-session protocol", a
   assert.match(consoleSource, /Open workspace/);
   assert.match(consoleSource, /Workspace terminal/);
   assert.match(consoleSource, /WorkspaceShell/);
+  assert.match(consoleSource, /ProductSidebar/);
+  assert.match(consoleSource, /NextActionPanel/);
+  assert.match(consoleSource, /Worker fleet/);
+  assert.match(consoleSource, /Overview/);
   assert.match(consoleSource, /Collaboration/);
   assert.match(consoleSource, /Agent Runs/);
   assert.match(consoleSource, /Processes & ports/);

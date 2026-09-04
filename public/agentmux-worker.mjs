@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, stat } from "node:fs/promises";
 import { homedir, platform, arch, hostname } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -41,7 +41,11 @@ const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const terminalProcesses = new Map();
 const monitoredWorkspaces = new Map();
+const fileIndexCache = new Map();
 let processMonitorBusy = false;
+const FILE_INDEX_INTERVAL = 15000;
+const FILE_INDEX_LIMIT = 2000;
+const FILE_INDEX_DEPTH = 12;
 
 async function api(path, body) {
   const response = await fetch(`${CONTROL_URL}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
@@ -252,12 +256,70 @@ async function discoverUnixPorts(processes) {
   }).filter(Boolean).slice(0, 100);
 }
 
+function ignoredWorkspacePath(relativePath) {
+  const parts = String(relativePath || "").split(/[\\/]+/).filter(Boolean);
+  const ignoredDirectories = new Set([".git", "node_modules", ".next", "dist", "build", "coverage", ".cache", ".wrangler", ".venv", "venv", "target"]);
+  if (parts.some((part) => ignoredDirectories.has(part.toLowerCase()))) return true;
+  const basename = String(parts.at(-1) || "").toLowerCase();
+  return /^\.env(?:\.|$)/.test(basename) || /\.(?:pem|key|p12|pfx|crt)$/.test(basename);
+}
+
+async function modifiedAt(path) {
+  try {
+    const details = await lstat(path);
+    return Math.round(details.mtimeMs);
+  } catch {
+    return null;
+  }
+}
+
+async function discoverWorkspaceFiles(cwd) {
+  const files = [];
+  const pending = [{ absolute: cwd, relative: "", depth: 0 }];
+  while (pending.length && files.length < FILE_INDEX_LIMIT) {
+    const current = pending.shift();
+    let entries;
+    try {
+      entries = await readdir(current.absolute, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (files.length >= FILE_INDEX_LIMIT) break;
+      const relativePath = current.relative ? `${current.relative}/${entry.name}` : entry.name;
+      if (ignoredWorkspacePath(relativePath) || entry.isSymbolicLink()) continue;
+      const absolute = join(current.absolute, entry.name);
+      if (entry.isDirectory()) {
+        files.push({ path: relativePath, kind: "directory", size: 0, modifiedAt: await modifiedAt(absolute) });
+        if (current.depth < FILE_INDEX_DEPTH) pending.push({ absolute, relative: relativePath, depth: current.depth + 1 });
+      } else if (entry.isFile()) {
+        let size = 0;
+        try {
+          size = (await lstat(absolute)).size;
+        } catch {
+          continue;
+        }
+        files.push({ path: relativePath, kind: "file", size, modifiedAt: await modifiedAt(absolute) });
+      }
+    }
+  }
+  return files;
+}
+
 async function discoverWorkspaceRuntime(workspace) {
   const cwd = workspaceDirectory(workspace);
-  if (!(await exists(cwd)) || process.platform === "win32") return { workspaceId: workspace.id, processes: [], ports: [] };
-  const processes = await discoverUnixProcesses(cwd);
-  const ports = await discoverUnixPorts(processes);
-  return { workspaceId: workspace.id, processes, ports };
+  if (!(await exists(cwd))) return { workspaceId: workspace.id, processes: [], ports: [], files: [] };
+  const processes = process.platform === "win32" ? [] : await discoverUnixProcesses(cwd);
+  const ports = process.platform === "win32" ? [] : await discoverUnixPorts(processes);
+  const cached = fileIndexCache.get(String(workspace.id));
+  const currentTime = Date.now();
+  let files;
+  if (!cached || currentTime - cached.scannedAt >= FILE_INDEX_INTERVAL) {
+    files = await discoverWorkspaceFiles(cwd);
+    fileIndexCache.set(String(workspace.id), { scannedAt: currentTime, files });
+  }
+  return { workspaceId: workspace.id, processes, ports, ...(files ? { files } : {}) };
 }
 
 function rememberMonitoredWorkspaces(workspaces) {

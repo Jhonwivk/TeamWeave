@@ -152,6 +152,24 @@ export const workspacePorts = sqliteTable("workspace_ports", {
   index("idx_workspace_ports_worker_last_seen").on(table.workerId, table.lastSeenAt),
 ]);
 
+export const workspaceFiles = sqliteTable("workspace_files", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => developmentWorkspaces.id),
+  workerId: text("worker_id").references(() => workers.id),
+  path: text("path").notNull(),
+  kind: text("kind").notNull().default("file"),
+  size: integer("size").notNull().default(0),
+  modifiedAt: integer("modified_at"),
+  status: text("status").notNull().default("present"),
+  lastSeenAt: integer("last_seen_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_workspace_files_workspace_path").on(table.workspaceId, table.path),
+  index("idx_workspace_files_owner_workspace_status").on(table.ownerId, table.workspaceId, table.status),
+  index("idx_workspace_files_worker_last_seen").on(table.workerId, table.lastSeenAt),
+]);
+
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),
   ownerId: text("owner_id").notNull(),

@@ -29,6 +29,7 @@ erDiagram
     DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_TERMINAL : exposes
     DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_PROCESS : observes
     DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_PORT : observes
+    DEVELOPMENT_WORKSPACE ||--o{ WORKSPACE_FILE : indexes
     WORKSPACE_TERMINAL ||--o{ TERMINAL_COMMAND : queues
     WORKSPACE_TERMINAL ||--o{ TERMINAL_EVENT : records
     DEVELOPMENT_WORKSPACE o|--o{ TASK : hosts
@@ -42,6 +43,13 @@ erDiagram
     WORKSPACE_PORT {
       string id
       int port
+      string status
+    }
+    WORKSPACE_FILE {
+      string id
+      string path
+      string kind
+      int size
       string status
     }
 ```
@@ -66,7 +74,11 @@ Worker 在本机启动交互 Shell，维护 `terminalId → child process` 映�
 
 Workspace Shell 是 Development Workspace 的统一产品表面，不创建第二套 Task、Agent Session 或事件模型。左侧只负责在现有 Workspace 间导航；中间 Collaboration 面板按 `workspaceId` 聚合 Task、Session 和需要人工处理的状态；右侧 Files、Git、Preview、Terminal、Agent Runs 共享同一 Workspace 上下文。
 
-Terminal 直接复用现有持久化 Terminal API，Agent Runs 直接读取 `agent_sessions`，Git 与人工审核仍进入原有 Task Detail/PR gate。Worker 每 5 秒扫描 READY checkout 的本地进程和 TCP 监听端口，将经过脱敏的快照写入 `workspace_processes` / `workspace_ports`；控制台 Preview 面板展示真实检测结果，并在有监听端口时以内嵌 iframe 加载经过校验的 `http(s)://localhost:<port>`。该入口只对连接 Worker 所在的同一台机器有效；Files 文件索引、公网隧道、分享链接和自动部署仍未开放，界面不会把 Worker 的 localhost 暴露到公网。
+Terminal 直接复用现有持久化 Terminal API，Agent Runs 直接读取 `agent_sessions`，Git 与人工审核仍进入原有 Task Detail/PR gate。Worker 每 5 秒扫描 READY checkout 的本地进程和 TCP 监听端口，并约每 15 秒扫描一次目录元数据，将快照写入 `workspace_processes` / `workspace_ports` / `workspace_files`；控制台 Files 面板只展示经过路径过滤的相对路径、文件夹、大小和更新时间，不读取文件内容。Preview 面板展示真实检测结果，并在有监听端口时以内嵌 iframe 加载经过校验的 `http(s)://localhost:<port>`。该入口只对连接 Worker 所在的同一台机器有效；文件内容编辑、公网隧道、分享链接和自动部署仍未开放，界面不会把 Worker 的 checkout 或 localhost 暴露到公网。
+
+### Workspace Files
+
+`workspace_files` 是 Worker 定期上报的只读目录索引，不是远程文件系统。Worker 只遍历工作区 checkout 的有限深度和数量，跳过 `.git`、`node_modules`、构建产物、缓存目录、虚拟环境以及常见 `.env` / 证书密钥文件；符号链接不会被跟随。控制面再次校验相对路径、文件类型和大小，并按工作区路径幂等更新，上一轮未出现的记录标记为 `stale`。因此 Files 面板适合快速定位项目结构，实际查看或修改内容仍通过本地 Terminal、Agent Run 或 GitHub 完成。
 
 ### Workspace process and port discovery
 

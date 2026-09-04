@@ -36,6 +36,13 @@
       "when": 1788486157595,
       "tag": "0004_open_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788490512556,
+      "tag": "0005_clear_the_hood",
+      "breakpoints": true
     }
   ]
 }

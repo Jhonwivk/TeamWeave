@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   const auth = requireOwner(request);
   if ("error" in auth) return auth.error;
   const db = database();
-  const [repositories, workers, tasks, events, sessions, messages, workspaces, workspaceEvents, processes, ports] = await Promise.all([
+  const [repositories, workers, tasks, events, sessions, messages, workspaces, workspaceEvents, processes, ports, files] = await Promise.all([
     db.prepare("SELECT id, full_name AS fullName, url, default_branch AS defaultBranch, visibility, created_at AS createdAt FROM repositories WHERE owner_id = ? ORDER BY created_at DESC").bind(auth.ownerId).all(),
     db.prepare("SELECT id, name, platform, capabilities, runtimes, last_seen_at AS lastSeenAt, created_at AS createdAt FROM workers WHERE owner_id = ? ORDER BY created_at DESC").bind(auth.ownerId).all(),
     db.prepare("SELECT id, repository_id AS repositoryId, workspace_id AS workspaceId, title, prompt, actor, model, mode, runtime, active_session_id AS activeSessionId, base_branch AS baseBranch, work_branch AS workBranch, status, worker_id AS workerId, attempt, summary, diff_stat AS diffStat, pr_url AS prUrl, error, created_at AS createdAt, updated_at AS updatedAt FROM tasks WHERE owner_id = ? ORDER BY updated_at DESC LIMIT 100").bind(auth.ownerId).all(),
@@ -17,6 +17,7 @@ export async function GET(request: Request) {
     db.prepare("SELECT e.id, e.workspace_id AS workspaceId, e.kind, e.message, e.payload, e.created_at AS createdAt FROM workspace_events e JOIN development_workspaces w ON w.id = e.workspace_id WHERE w.owner_id = ? ORDER BY e.created_at DESC LIMIT 300").bind(auth.ownerId).all(),
     db.prepare("SELECT p.id, p.owner_id AS ownerId, p.workspace_id AS workspaceId, p.worker_id AS workerId, p.pid, p.parent_pid AS parentPid, p.name, p.command, p.cwd, p.status, p.started_at AS startedAt, p.last_seen_at AS lastSeenAt, p.updated_at AS updatedAt FROM workspace_processes p JOIN development_workspaces w ON w.id = p.workspace_id WHERE p.owner_id = ? ORDER BY p.updated_at DESC LIMIT 500").bind(auth.ownerId).all(),
     db.prepare("SELECT p.id, p.owner_id AS ownerId, p.workspace_id AS workspaceId, p.worker_id AS workerId, p.process_id AS processId, p.pid, p.host, p.port, p.protocol, p.label, p.url, p.status, p.first_seen_at AS firstSeenAt, p.last_seen_at AS lastSeenAt, p.updated_at AS updatedAt FROM workspace_ports p JOIN development_workspaces w ON w.id = p.workspace_id WHERE p.owner_id = ? ORDER BY p.updated_at DESC LIMIT 300").bind(auth.ownerId).all(),
+    db.prepare("SELECT f.id, f.owner_id AS ownerId, f.workspace_id AS workspaceId, f.worker_id AS workerId, f.path, f.kind, f.size, f.modified_at AS modifiedAt, f.status, f.last_seen_at AS lastSeenAt, f.updated_at AS updatedAt FROM workspace_files f JOIN development_workspaces w ON w.id = f.workspace_id WHERE f.owner_id = ? ORDER BY f.path ASC LIMIT 5000").bind(auth.ownerId).all(),
   ]);
   return Response.json({
     repositories: repositories.results,
@@ -29,6 +30,7 @@ export async function GET(request: Request) {
     workspaceEvents: workspaceEvents.results.map((row: Record<string, unknown>) => ({ ...row, payload: parseJson(String(row.payload || ""), null) })),
     processes: processes.results,
     ports: ports.results,
+    files: files.results,
     serverTime: Date.now(),
   });
 }

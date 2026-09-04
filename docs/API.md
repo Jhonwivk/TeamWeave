@@ -39,6 +39,7 @@ Content-Type: application/json
   "workspaceEvents": [],
   "processes": [],
   "ports": [],
+  "files": [],
   "serverTime": 1788316800000
 }
 ```
@@ -52,6 +53,8 @@ Content-Type: application/json
 `capabilities`、`runtimes`、`payload` 和 `artifacts` 已解析为 JSON 值。
 
 `processes` 和 `ports` 是当前 owner 工作区的最近运行时快照；控制台只展示 `running` / `listening` 记录。命令行已在 Worker 端做长度限制和常见凭据脱敏，端口 URL 只允许生成 `http(s)://localhost:<port>`，供连接 Worker 的同一台机器以内嵌 Preview 加载。
+
+`files` 是 Worker 从 READY checkout 定期上报的只读元数据索引，包含相对路径、`file` / `directory` 类型、大小和更新时间；控制面只返回 `present` 记录。索引会跳过 `.git`、依赖目录、构建产物、缓存目录和常见密钥文件，不包含文件内容，也不提供通过控制面写入文件的接口。
 
 ### POST /api/repositories
 
@@ -201,7 +204,7 @@ Action 与当前状态不匹配时返回 `409`。
 
 ### POST /api/worker/processes
 
-Worker 每隔几秒上报 READY 工作区的本地进程和 TCP 监听端口。此接口只接受绑定 Worker 自己的工作区，并要求进程 `cwd` 位于该工作区 checkout 内；控制面会将上一轮未出现的记录标为 `stale`，再按工作区/PID 和工作区/协议/端口幂等更新。
+Worker 每隔几秒上报 READY 工作区的本地进程和 TCP 监听端口，并约每 15 秒刷新一次只读文件索引。此接口只接受绑定 Worker 自己的工作区，并要求进程 `cwd` 位于该工作区 checkout 内；控制面会将上一轮未出现的记录标为 `stale`，再按工作区/PID、工作区/协议/端口和工作区/路径幂等更新。
 
 ```json
 {
@@ -213,6 +216,10 @@ Worker 每隔几秒上报 READY 工作区的本地进程和 TCP 监听端口。�
       ],
       "ports": [
         { "pid": 4812, "host": "127.0.0.1", "port": 3000, "protocol": "http", "label": "Next.js development server" }
+      ],
+      "files": [
+        { "path": "app/page.tsx", "kind": "file", "size": 1842, "modifiedAt": 1788316800000 },
+        { "path": "app", "kind": "directory", "size": 0, "modifiedAt": 1788316800000 }
       ]
     }
   ]

@@ -19,10 +19,18 @@ type PortSnapshot = {
   label?: string;
 };
 
+type FileSnapshot = {
+  path?: string;
+  kind?: string;
+  size?: number;
+  modifiedAt?: number | null;
+};
+
 type WorkspaceSnapshot = {
   workspaceId?: string;
   processes?: ProcessSnapshot[];
   ports?: PortSnapshot[];
+  files?: FileSnapshot[];
 };
 
 type ProcessesInput = { snapshots?: WorkspaceSnapshot[] };
@@ -46,6 +54,7 @@ type WorkspaceRow = {
 const ACTIVE_WORKSPACE_STATUSES = ["queued", "claiming", "preparing", "ready"];
 const MAX_SNAPSHOTS = 20;
 const MAX_ITEMS_PER_SNAPSHOT = 100;
+const MAX_FILES_PER_SNAPSHOT = 2000;
 const BATCH_SIZE = 80;
 
 function integerInRange(value: unknown, min: number, max: number) {
@@ -63,6 +72,31 @@ function processId(workspaceId: string, pid: number) {
 
 function portId(workspaceId: string, protocol: string, port: number) {
   return `port_${safeKey(workspaceId)}_${protocol}_${port}`;
+}
+
+function fileId(workspaceId: string, path: string) {
+  let hash = 2_166_136_261;
+  for (const character of path) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `file_${safeKey(workspaceId)}_${(hash >>> 0).toString(16)}`;
+}
+
+function safeRelativePath(value: unknown) {
+  const candidate = cleanString(value, 500).replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!candidate || candidate.startsWith("/") || /^[A-Za-z]:\//.test(candidate)) return null;
+  const parts = candidate.split("/");
+  if (parts.some((part) => !part || part === "." || part === ".." || part.length > 180)) return null;
+  const ignoredDirectories = new Set([".git", "node_modules", ".next", "dist", "build", "coverage", ".cache", ".wrangler", ".venv", "venv", "target"]);
+  if (parts.some((part) => ignoredDirectories.has(part.toLowerCase()))) return null;
+  const basename = parts[parts.length - 1].toLowerCase();
+  if (/^\.env(?:\.|$)/.test(basename) || /\.(?:pem|key|p12|pfx|crt)$/.test(basename)) return null;
+  return parts.join("/");
+}
+
+function safeFileKind(value: unknown) {
+  return String(value).toLowerCase() === "directory" ? "directory" : "file";
 }
 
 function safeHost(value: unknown) {
@@ -116,6 +150,8 @@ export async function POST(request: Request) {
 
     const processes = Array.isArray(snapshot.processes) ? snapshot.processes.slice(0, MAX_ITEMS_PER_SNAPSHOT) : [];
     const ports = Array.isArray(snapshot.ports) ? snapshot.ports.slice(0, MAX_ITEMS_PER_SNAPSHOT) : [];
+    const filesProvided = Array.isArray(snapshot.files);
+    const files = filesProvided ? snapshot.files!.slice(0, MAX_FILES_PER_SNAPSHOT) : [];
     const processIds = new Map<number, string>();
     statements.push(db.prepare(
       "UPDATE workspace_processes SET status = 'stale', updated_at = ? WHERE workspace_id = ? AND worker_id = ? AND status = 'running'"
@@ -123,6 +159,11 @@ export async function POST(request: Request) {
     statements.push(db.prepare(
       "UPDATE workspace_ports SET status = 'stale', updated_at = ? WHERE workspace_id = ? AND worker_id = ? AND status = 'listening'"
     ).bind(timestamp, workspaceId, auth.worker.id));
+    if (filesProvided) {
+      statements.push(db.prepare(
+        "UPDATE workspace_files SET status = 'stale', updated_at = ? WHERE workspace_id = ? AND worker_id = ? AND status = 'present'"
+      ).bind(timestamp, workspaceId, auth.worker.id));
+    }
 
     for (const item of processes) {
       const pid = integerInRange(item?.pid, 1, 4_000_000_000);
@@ -178,6 +219,31 @@ export async function POST(request: Request) {
            last_seen_at = excluded.last_seen_at,
            updated_at = excluded.updated_at`
       ).bind(id, auth.worker.ownerId, workspaceId, auth.worker.id, process, pid, host, port, protocol, label, url, timestamp, timestamp, timestamp));
+    }
+
+    if (filesProvided) {
+      for (const item of files) {
+        const path = safeRelativePath(item?.path);
+        if (!path) continue;
+        const kind = safeFileKind(item.kind);
+        const size = integerInRange(item.size, 0, 1_099_511_627_776) ?? 0;
+        const modifiedAt = integerInRange(item.modifiedAt, 0, 4_102_444_800_000);
+        const id = fileId(workspaceId, path);
+        statements.push(db.prepare(
+          `INSERT INTO workspace_files
+            (id, owner_id, workspace_id, worker_id, path, kind, size, modified_at, status, last_seen_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'present', ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             worker_id = excluded.worker_id,
+             path = excluded.path,
+             kind = excluded.kind,
+             size = excluded.size,
+             modified_at = excluded.modified_at,
+             status = 'present',
+             last_seen_at = excluded.last_seen_at,
+             updated_at = excluded.updated_at`
+        ).bind(id, auth.worker.ownerId, workspaceId, auth.worker.id, path, kind, size, modifiedAt, timestamp, timestamp));
+      }
     }
     statements.push(db.prepare("UPDATE development_workspaces SET last_active_at = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND worker_id = ?").bind(timestamp, timestamp, workspaceId, auth.worker.ownerId, auth.worker.id));
   }
